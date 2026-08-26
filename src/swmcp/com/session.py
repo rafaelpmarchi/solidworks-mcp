@@ -80,6 +80,7 @@ def _connect() -> Any:
     import pywintypes
     import win32com.client
 
+    sldworks_module()  # gen_py primeiro: garante wrap early-bound sempre
     try:
         app = win32com.client.GetActiveObject(PROG_ID)
         log.info("conectado à instância aberta do SolidWorks")
@@ -97,6 +98,41 @@ def _connect() -> Any:
         ) from exc
     app.Visible = True  # o SolidWorks fica sempre visível ao usuário (Visão §1)
     return app
+
+
+SLDWORKS_TLB = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.tlb"
+
+_sldworks_module: Any = None
+
+
+def sldworks_module() -> Any:
+    """Módulo makepy gerado do sldworks.tlb (cache em gen_py).
+
+    Necessário para cast de interfaces (ex.: IModelDoc2 → IDrawingDoc): o
+    dispatch dinâmico não expõe os membros das interfaces derivadas, e o
+    ISldWorks não automatiza o makepy (sem GetTypeInfo).
+    """
+    global _sldworks_module
+    if _sldworks_module is None:
+        import pythoncom
+        import win32com.client.gencache as gencache
+
+        tlb = pythoncom.LoadTypeLib(SLDWORKS_TLB)
+        guid, lcid, _syskind, major, minor, _flags = tlb.GetLibAttr()
+        _sldworks_module = gencache.EnsureModule(str(guid), lcid, major, minor)
+        log.info("typelib sldworks %s.%s carregado (makepy)", major, minor)
+    return _sldworks_module
+
+
+def cast_to(obj: Any, interface: str) -> Any:
+    """Reveste um proxy COM com a interface gerada — ex.: cast_to(doc, "IDrawingDoc")."""
+    cls = getattr(sldworks_module(), interface, None)
+    if cls is None:
+        raise ComCallError("cast_to", (interface,), None, f"interface {interface!r} não existe no typelib sldworks")
+    try:
+        return cls(obj._oleobj_)
+    except Exception as exc:  # QI recusado etc. — erro rico, nunca silencioso
+        raise ComCallError("cast_to", (interface,), getattr(exc, "hresult", None), str(exc)) from exc
 
 
 def _read_status(app: Any) -> dict[str, Any]:

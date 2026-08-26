@@ -19,29 +19,11 @@ def build_server() -> MCPServer:
     mcp = MCPServer("solidworks", instructions=INSTRUCTIONS)
     session = SwSession()
 
-    from swmcp.tools import connection
+    from swmcp.tools import connection, read_drawing, read_model
 
     connection.register(mcp, session)
-
-    # As famílias seguintes são registradas conforme as etapas avançam
-    try:
-        from swmcp.tools import read_drawing
-
-        read_drawing.register(mcp, session)
-    except ImportError:
-        pass
-    try:
-        from swmcp.tools import read_model
-
-        read_model.register(mcp, session)
-    except ImportError:
-        pass
-    try:
-        from swmcp.tools import review
-
-        review.register(mcp, session)
-    except ImportError:
-        pass
+    read_drawing.register(mcp, session)
+    read_model.register(mcp, session)
 
     return mcp
 
