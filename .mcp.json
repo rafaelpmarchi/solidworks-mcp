@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "solidworks": {
+      "type": "stdio",
+      "command": "C:/Users/peron/Documents/Github/solidworks/.venv/Scripts/swmcp.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}
