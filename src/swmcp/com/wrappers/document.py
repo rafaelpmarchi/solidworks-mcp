@@ -23,6 +23,18 @@ def open_document(app: Any, path: str, read_only: bool = True) -> dict[str, Any]
     if not os.path.exists(path):
         raise FileNotFoundError(f"arquivo não existe: {path}")
 
+    already = find_open_document(app, path)
+    if already is not None:
+        title = com_call(already, "GetTitle")
+        activate_document(app, title)
+        return {
+            "title": title,
+            "path": path,
+            "type": constants.DOC_TYPE_NAMES[doc_type_for_path(path)],
+            "read_only": bool(com_call(already, "IsOpenedReadOnly")),
+            "warnings": ["documento já estava aberto — apenas ativado"],
+        }
+
     doc_type = doc_type_for_path(path)
     options = constants.swOpenDocOptions_Silent
     if read_only:

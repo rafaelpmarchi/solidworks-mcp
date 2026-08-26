@@ -80,11 +80,12 @@ def _connect() -> Any:
     import pywintypes
     import win32com.client
 
-    sldworks_module()  # gen_py primeiro: garante wrap early-bound sempre
+    sldworks_module()  # garante o gen_py antes do cast
     try:
         app = win32com.client.GetActiveObject(PROG_ID)
         log.info("conectado à instância aberta do SolidWorks")
-        return app
+        # early binding determinístico: byref volta em tupla, sempre
+        return cast_to(app, "ISldWorks")
     except pywintypes.com_error as exc:
         if exc.args and exc.args[0] not in (-2147221021,):  # MK_E_UNAVAILABLE
             raise ComCallError("GetActiveObject", (PROG_ID,), exc.args[0], str(exc)) from exc
@@ -97,7 +98,7 @@ def _connect() -> Any:
             f"não foi possível iniciar o SolidWorks ({PROG_ID}): {exc}"
         ) from exc
     app.Visible = True  # o SolidWorks fica sempre visível ao usuário (Visão §1)
-    return app
+    return cast_to(app, "ISldWorks")
 
 
 SLDWORKS_TLB = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.tlb"
@@ -122,6 +123,28 @@ def sldworks_module() -> Any:
         _sldworks_module = gencache.EnsureModule(str(guid), lcid, major, minor)
         log.info("typelib sldworks %s.%s carregado (makepy)", major, minor)
     return _sldworks_module
+
+
+SWCONST_TLB = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\swconst.tlb"
+
+_swconst: Any = None
+
+
+def swconst() -> Any:
+    """Constantes oficiais do SolidWorks (enum swconst.tlb via makepy).
+
+    Uso: ``swconst().swDocPART``. Fonte de verdade para valores de enum —
+    preferir a chutar números em wrappers de escrita.
+    """
+    global _swconst
+    if _swconst is None:
+        import pythoncom
+        import win32com.client.gencache as gencache
+
+        tlb = pythoncom.LoadTypeLib(SWCONST_TLB)
+        guid, lcid, _syskind, major, minor, _flags = tlb.GetLibAttr()
+        _swconst = gencache.EnsureModule(str(guid), lcid, major, minor).constants
+    return _swconst
 
 
 def cast_to(obj: Any, interface: str) -> Any:
