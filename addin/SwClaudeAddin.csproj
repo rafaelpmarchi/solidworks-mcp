@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="claude-icon.bmp" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="claude-icon-32.bmp" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="SolidWorks.Interop.sldworks">
       <HintPath>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.sldworks.dll</HintPath>
       <EmbedInteropTypes>false</EmbedInteropTypes>

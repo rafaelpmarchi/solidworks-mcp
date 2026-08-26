@@ -33,7 +33,11 @@ namespace SwClaudeAddin
 
             EnsureBackendRunning();
 
-            _taskpane = (ITaskpaneView)_app.CreateTaskpaneView2("", TITLE);
+            var iconPath = Path.Combine(
+                Path.GetDirectoryName(typeof(Addin).Assembly.Location) ?? "",
+                "claude-icon.bmp");
+            _taskpane = (ITaskpaneView)_app.CreateTaskpaneView2(
+                File.Exists(iconPath) ? iconPath : "", TITLE);
             _control = new ChatControl(BACKEND_URL);
             _taskpane.DisplayWindowFromHandlex64(_control.Handle.ToInt64());
             return true;
