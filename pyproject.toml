@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.7",
     "pywin32>=308; sys_platform == 'win32'",
     "pyyaml>=6.0",
+    "anthropic>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +28,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-swmcp = ["review/*.yaml"]
+swmcp = ["review/*.yaml", "chat/web/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]

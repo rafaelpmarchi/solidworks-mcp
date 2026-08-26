@@ -6,3 +6,6 @@ build/
 dist/
 logs/
 .pytest_cache/
+addin/bin/
+addin/obj/
+addin/register.log
