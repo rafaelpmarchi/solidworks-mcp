@@ -101,6 +101,7 @@ async function submit(ev) {
         if (ev.type === "text") add("bot", ev.text);
         else if (ev.type === "tool") add("tool", toolLabel(ev.name, ev.input));
         else if (ev.type === "error") add("err", ev.text);
+        else if (ev.type === "need_key") askKey(ev.text, text);
       }
     }
   } catch (e) {
@@ -111,6 +112,47 @@ async function submit(ev) {
     send.disabled = false;
     input.focus();
   }
+}
+
+function askKey(motivo, pendente) {
+  add("bot", motivo);
+  const wrap = document.createElement("div");
+  wrap.className = "msg bot";
+  wrap.innerHTML = '<div style="display:flex;gap:6px">' +
+    '<input type="password" placeholder="sk-ant-…" style="flex:1;background:#1a1a1d;' +
+    'color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px">' +
+    '<button style="background:var(--accent);color:#fff;border:none;border-radius:6px;' +
+    'padding:0 12px;cursor:pointer">Salvar</button></div>' +
+    '<div class="hint" style="color:var(--dim);font-size:12px;margin-top:4px"></div>';
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+  const campo = wrap.querySelector("input");
+  const botao = wrap.querySelector("button");
+  const hint = wrap.querySelector(".hint");
+  campo.focus();
+  async function salvar() {
+    botao.disabled = true;
+    hint.textContent = "validando…";
+    try {
+      const r = await fetch("/apikey", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({key: campo.value})});
+      const j = await r.json();
+      if (j.ok) {
+        wrap.remove();
+        add("bot", "Chave validada e salva ✔ — continuando…");
+        if (pendente) { input.value = pendente; form.requestSubmit(); }
+      } else {
+        hint.textContent = j.error;
+        botao.disabled = false;
+      }
+    } catch (e) {
+      hint.textContent = "falha: " + e.message;
+      botao.disabled = false;
+    }
+  }
+  botao.addEventListener("click", salvar);
+  campo.addEventListener("keydown", ev => { if (ev.key === "Enter") salvar(); });
 }
 
 form.addEventListener("submit", submit);

@@ -64,6 +64,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
             except (ConnectionAbortedError, BrokenPipeError):
                 log.info("cliente desconectou no meio do turno")
+        elif self.path == "/apikey":
+            length = int(self.headers.get("Content-Length", 0))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            error = agent().set_api_key(payload.get("key") or "")
+            if error:
+                body = json.dumps({"ok": False, "error": error}, ensure_ascii=False).encode()
+            else:
+                body = b'{"ok": true}'
+            self._respond(200, "application/json", body)
         elif self.path == "/reset":
             agent().reset()
             self._respond(200, "application/json", b'{"ok": true}')

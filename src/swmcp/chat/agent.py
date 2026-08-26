@@ -104,11 +104,7 @@ class ChatAgent:
                 yield from self._run_turn()
             except anthropic.AuthenticationError:
                 self._messages.pop()
-                yield {
-                    "type": "error",
-                    "text": "Sem credencial da API Anthropic. Defina a variável "
-                    "ANTHROPIC_API_KEY (ou rode `ant auth login`) e reinicie o chat.",
-                }
+                yield {"type": "need_key", "text": "A chave da API Anthropic é inválida ou foi revogada. Cole uma chave nova abaixo."}
             except anthropic.APIStatusError as exc:
                 self._messages.pop()
                 yield {"type": "error", "text": f"Erro da API ({exc.status_code}): {exc.message}"}
@@ -117,11 +113,10 @@ class ChatAgent:
                 if "Could not resolve authentication" in str(exc):
                     self._messages.pop()
                     yield {
-                        "type": "error",
-                        "text": "Sem credencial da API Anthropic nesta máquina. Defina a "
-                        "variável de ambiente ANTHROPIC_API_KEY (Configurações do Windows "
-                        "→ variáveis de ambiente) ou rode `ant auth login`, e reinicie o "
-                        "SolidWorks/add-in.",
+                        "type": "need_key",
+                        "text": "Para ativar o chat, cole sua chave da API Anthropic "
+                        "(console.anthropic.com → API Keys). Ela fica salva só nesta "
+                        "máquina, no seu perfil do Windows.",
                     }
                 else:
                     yield {"type": "error", "text": f"Falha: {exc}"}
@@ -156,3 +151,43 @@ class ChatAgent:
     def reset(self) -> None:
         with _lock:
             self._messages.clear()
+
+    def set_api_key(self, key: str) -> str | None:
+        """Valida a chave, aplica na sessão e persiste no ambiente do usuário.
+
+        Retorna None em caso de sucesso, ou a mensagem de erro.
+        """
+        key = key.strip()
+        if not key:
+            return "chave vazia"
+        candidate = anthropic.Anthropic(api_key=key)
+        try:
+            candidate.models.retrieve(MODEL)  # chamada de metadados: valida auth
+        except anthropic.AuthenticationError:
+            return "chave rejeitada pela API — confira se copiou a chave inteira"
+        except anthropic.APIStatusError as exc:
+            return f"não deu para validar a chave (HTTP {exc.status_code}): {exc.message}"
+        except anthropic.APIConnectionError:
+            return "sem conexão com api.anthropic.com — verifique a rede/proxy"
+
+        with _lock:
+            self._client = candidate
+        _persist_user_env("ANTHROPIC_API_KEY", key)
+        return None
+
+
+def _persist_user_env(name: str, value: str) -> None:
+    """Grava em HKCU\\Environment (persiste entre sessões) e no processo atual."""
+    import os
+    import winreg
+
+    os.environ[name] = value
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as k:
+        winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
+    # avisa o shell para novos processos enxergarem a variável
+    import ctypes
+
+    ctypes.windll.user32.SendMessageTimeoutW(
+        0xFFFF, 0x1A, 0, "Environment", 0x0002, 5000, ctypes.byref(ctypes.c_ulong())
+    )
+    log.info("variável %s persistida no ambiente do usuário", name)
