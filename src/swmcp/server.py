@@ -19,11 +19,12 @@ def build_server() -> MCPServer:
     mcp = MCPServer("solidworks", instructions=INSTRUCTIONS)
     session = SwSession()
 
-    from swmcp.tools import connection, read_drawing, read_model
+    from swmcp.tools import connection, read_drawing, read_model, review
 
     connection.register(mcp, session)
     read_drawing.register(mcp, session)
     read_model.register(mcp, session)
+    review.register(mcp, session)
 
     return mcp
 

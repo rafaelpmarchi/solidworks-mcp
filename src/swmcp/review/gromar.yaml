@@ -1,0 +1,41 @@
+# Regras de revisão da Gromar — dados, não código.
+# Levantamento inicial feito sobre o template real (backup do ERP);
+# REVISAR COM O PROJETISTA antes de considerar definitivo (pendência #3).
+
+title_block:
+  # rótulos que precisam existir na legenda (notas do formato de folha)
+  required_labels:
+    - "MATERIAL:"
+    - "TÍTULO:"
+    - "DES. Nº"
+    - "REVISÃO"
+    - "ESCALA:"
+
+material:
+  # padrões (regex, case-insensitive) que identificam um material declarado
+  # em alguma nota da legenda — ausência de todos = material não declarado
+  patterns:
+    - "A[IÇ]O\\s"
+    - "\\bINOX"
+    - "\\bSAE\\s?\\d"
+    - "\\bAISI\\s?\\d"
+    - "\\bDIN\\s?[0-9C]"
+    - "\\bG\\d{2}[A-Z]"        # ex.: G17CrMoV510
+    - "\\bSTELLITE"
+    - "\\bTP\\s?7000"
+    - "\\bBRONZE"
+    - "\\bLAT[ÃA]O"
+    - "\\bALUM[ÍI]NIO"
+    - "\\bNYLON|\\bPOLIACETAL|\\bPTFE|\\bPEEK"
+
+dimensions:
+  # cota marcada para inspeção precisa de tolerância explícita
+  inspection_requires_tolerance: true
+
+gtol:
+  # GD&T que referencia datum exige o datum presente na mesma vista
+  require_datum_in_view: true
+
+weld:
+  # símbolo de solda sem texto/descrição é incompleto
+  require_text: true
