@@ -52,3 +52,15 @@ def test_is_disconnected_reconhece_hresults_de_queda():
 def test_erro_generico_nao_e_disconnected():
     err = ComCallError("m", (), -2147352567, "x")
     assert not err.is_disconnected
+
+
+def test_com_get_resolve_metodo_sem_argumento():
+    # early binding expõe propriedades como método — com_get deve chamar
+    class EarlyBound:
+        def RevisionNumber(self):  # noqa: N802 — nome COM
+            return "31.5.0"
+
+        valor_simples = 42
+
+    assert com_get(EarlyBound(), "RevisionNumber") == "31.5.0"
+    assert com_get(EarlyBound(), "valor_simples") == 42

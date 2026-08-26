@@ -40,23 +40,6 @@
 <body>
 <header><b>Claude · SolidWorks</b><span style="color:var(--dim)">Gromar</span>
   <button id="reset" title="Limpar conversa">limpar</button></header>
-<div id="login" style="display:none; position:absolute; inset:0; background:var(--bg);
-     z-index:10; padding:32px 24px; text-align:center">
-  <div style="max-width:340px; margin:10vh auto 0">
-    <div style="font-size:34px; margin-bottom:8px">✳</div>
-    <h2 style="margin:0 0 4px; font-size:17px">Entrar no Claude</h2>
-    <p style="color:var(--dim); margin:0 0 20px">Cole sua chave da API Anthropic para
-      ativar o assistente. Ela fica salva apenas nesta máquina, no seu perfil do Windows.</p>
-    <input id="loginKey" type="password" placeholder="sk-ant-…" autocomplete="off"
-      style="width:100%; background:var(--panel); color:var(--text); border:1px solid var(--border);
-             border-radius:8px; padding:10px; font:inherit; margin-bottom:10px">
-    <button id="loginBtn" style="width:100%; background:var(--accent); color:#fff; border:none;
-      border-radius:8px; padding:10px; font:inherit; cursor:pointer">Entrar</button>
-    <div id="loginHint" style="color:var(--dim); font-size:12px; margin-top:10px; min-height:18px"></div>
-    <p style="color:var(--dim); font-size:12px; margin-top:16px">Não tem chave?
-      Crie em <b>console.anthropic.com</b> → API Keys.</p>
-  </div>
-</div>
 <div id="log">
   <div class="msg bot">Olá! Estou dentro do SolidWorks. Posso ver o que está aberto
 (<code>status</code>), ler um desenho por completo, revisar com as regras da Gromar
@@ -118,7 +101,6 @@ async function submit(ev) {
         if (ev.type === "text") add("bot", ev.text);
         else if (ev.type === "tool") add("tool", toolLabel(ev.name, ev.input));
         else if (ev.type === "error") add("err", ev.text);
-        else if (ev.type === "need_key") askKey(ev.text, text);
       }
     }
   } catch (e) {
@@ -130,51 +112,6 @@ async function submit(ev) {
     input.focus();
   }
 }
-
-const login = document.getElementById("login");
-const loginKey = document.getElementById("loginKey");
-const loginBtn = document.getElementById("loginBtn");
-const loginHint = document.getElementById("loginHint");
-let pendenteAposLogin = null;
-
-function askKey(motivo, pendente) {
-  pendenteAposLogin = pendente || null;
-  loginHint.textContent = motivo || "";
-  login.style.display = "block";
-  loginKey.focus();
-}
-
-async function entrar() {
-  const key = loginKey.value.trim();
-  if (!key) { loginHint.textContent = "cole a chave (começa com sk-ant-…)"; return; }
-  loginBtn.disabled = true;
-  loginHint.textContent = "validando…";
-  try {
-    const r = await fetch("/apikey", {method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({key})});
-    const j = await r.json();
-    if (j.ok) {
-      login.style.display = "none";
-      loginKey.value = "";
-      loginHint.textContent = "";
-      add("bot", "Chave validada ✔ Pronto para usar.");
-      if (pendenteAposLogin) { input.value = pendenteAposLogin; pendenteAposLogin = null; form.requestSubmit(); }
-      else input.focus();
-    } else {
-      loginHint.textContent = j.error;
-    }
-  } catch (e) {
-    loginHint.textContent = "sem conexão com o backend: " + e.message;
-  } finally {
-    loginBtn.disabled = false;
-  }
-}
-loginBtn.addEventListener("click", entrar);
-loginKey.addEventListener("keydown", ev => { if (ev.key === "Enter") entrar(); });
-
-// ao abrir: se não há credencial, mostra a tela de login direto
-fetch("/haskey").then(r => r.json()).then(j => { if (!j.has) askKey("", null); }).catch(() => {});
 
 form.addEventListener("submit", submit);
 input.addEventListener("keydown", ev => {

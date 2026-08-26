@@ -42,15 +42,6 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(200, "text/html; charset=utf-8", body)
         elif self.path == "/health":
             self._respond(200, "application/json", b'{"ok": true}')
-        elif self.path == "/haskey":
-            import os
-
-            has = bool(
-                os.environ.get("ANTHROPIC_API_KEY")
-                or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-                or _registry_key_present()
-            )
-            self._respond(200, "application/json", json.dumps({"has": has}).encode())
         else:
             self._respond(404, "text/plain", b"not found")
 
@@ -73,15 +64,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
             except (ConnectionAbortedError, BrokenPipeError):
                 log.info("cliente desconectou no meio do turno")
-        elif self.path == "/apikey":
-            length = int(self.headers.get("Content-Length", 0))
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            error = agent().set_api_key(payload.get("key") or "")
-            if error:
-                body = json.dumps({"ok": False, "error": error}, ensure_ascii=False).encode()
-            else:
-                body = b'{"ok": true}'
-            self._respond(200, "application/json", body)
         elif self.path == "/reset":
             agent().reset()
             self._respond(200, "application/json", b'{"ok": true}')
@@ -94,22 +76,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
-
-def _registry_key_present() -> bool:
-    """Chave persistida via chat em sessão anterior (HKCU\\Environment)."""
-    try:
-        import os
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
-            value, _ = winreg.QueryValueEx(k, "ANTHROPIC_API_KEY")
-        if value:
-            os.environ.setdefault("ANTHROPIC_API_KEY", value)
-            return True
-    except OSError:
-        pass
-    return False
 
 
 def main() -> None:

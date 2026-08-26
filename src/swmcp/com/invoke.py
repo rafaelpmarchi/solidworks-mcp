@@ -67,11 +67,21 @@ def com_call(obj: Any, method: str, *args: Any) -> Any:
 
 
 def com_get(obj: Any, prop: str) -> Any:
-    """Lê ``obj.prop`` traduzindo falha COM em ComCallError."""
+    """Lê ``obj.prop`` traduzindo falha COM em ComCallError.
+
+    Com early binding (gen_py), propriedades sem argumento podem resolver como
+    método — nesse caso a chamada é feita aqui, para o chamador sempre receber
+    o valor (nunca um bound method solto).
+    """
+    import types
+
     import pywintypes
 
     try:
-        return getattr(obj, prop)
+        value = getattr(obj, prop)
+        if isinstance(value, types.MethodType):
+            value = value()
+        return value
     except pywintypes.com_error as exc:
         raise _translate(prop, (), exc) from exc
 
