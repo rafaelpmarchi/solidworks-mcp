@@ -17,6 +17,35 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         return session.run(lambda app: a.insert_component(app, path, x_mm, y_mm, z_mm))
 
     @mcp.tool()
+    def list_components() -> list[dict[str, Any]]:
+        """Componentes da montagem ativa: nome, arquivo, suprimido, fixo."""
+        return session.run(a.list_components)
+
+    @mcp.tool()
+    def set_component_suppressed(name: str, suppressed: bool = True) -> dict[str, bool]:
+        """Suprime/resolve um componente da montagem (nome de list_components)."""
+        session.run(lambda app: a.set_component_suppressed(app, name, suppressed))
+        return {"ok": True}
+
+    @mcp.tool()
+    def set_component_fixed(name: str, fixed: bool = True) -> dict[str, bool]:
+        """Fixa (ou libera) um componente da montagem."""
+        session.run(lambda app: a.set_component_fixed(app, name, fixed))
+        return {"ok": True}
+
+    @mcp.tool()
+    def move_component(name: str, dx_mm: float, dy_mm: float, dz_mm: float) -> dict[str, bool]:
+        """Translada um componente livre (mates podem limitar o movimento)."""
+        session.run(lambda app: a.move_component(app, name, dx_mm, dy_mm, dz_mm))
+        return {"ok": True}
+
+    @mcp.tool()
+    def check_interference() -> list[dict[str, Any]]:
+        """Detecção de interferência entre componentes da montagem ativa.
+        Retorna pares de componentes e o volume de interferência em mm³."""
+        return session.run(a.check_interference)
+
+    @mcp.tool()
     def add_mate(mate_type: str, distance_mm: float = 0.0, angle_deg: float = 0.0,
                  flip: bool = False) -> dict[str, str]:
         """Cria um mate entre as DUAS entidades já selecionadas (use

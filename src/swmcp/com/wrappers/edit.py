@@ -116,6 +116,45 @@ def activate_configuration(app: Any, name: str) -> None:
         raise ComCallError("ShowConfiguration2", (name,), None, "configuração não encontrada")
 
 
+def list_equations(app: Any) -> list[dict[str, Any]]:
+    """Equações do documento ativo (índice, expressão, valor)."""
+    model = _model(_active_doc(app))
+    eqmgr = com_get(model, "GetEquationMgr")
+    if eqmgr is None:
+        return []
+    eqmgr = cast_to(eqmgr, "IEquationMgr")
+    count = com_get(eqmgr, "GetCount")
+    out = []
+    for i in range(count):
+        out.append({
+            "index": i,
+            "equation": com_call(eqmgr, "Equation", i),
+            "value": com_call(eqmgr, "Value", i),
+            "global_variable": bool(com_call(eqmgr, "GlobalVariable", i)),
+        })
+    return out
+
+
+def set_equation(app: Any, index: int, equation: str) -> dict[str, Any]:
+    """Substitui a equação no índice dado (formato: '\"D1@Esboço1\" = 25mm')."""
+    model = _model(_active_doc(app))
+    eqmgr = cast_to(com_get(model, "GetEquationMgr"), "IEquationMgr")
+    com_call(eqmgr, "SetEquation", index, equation)
+    com_call(model, "EditRebuild3")
+    return {"index": index, "equation": equation}
+
+
+def add_equation(app: Any, equation: str) -> dict[str, Any]:
+    """Adiciona equação/variável global (ex.: '\"espessura\" = 5mm')."""
+    model = _model(_active_doc(app))
+    eqmgr = cast_to(com_get(model, "GetEquationMgr"), "IEquationMgr")
+    idx = com_call(eqmgr, "Add2", -1, equation, True)
+    if idx < 0:
+        raise ComCallError("Add2", (equation,), None, "equação rejeitada — confira a sintaxe")
+    com_call(model, "EditRebuild3")
+    return {"index": idx, "equation": equation}
+
+
 def list_features(app: Any, limit: int = 100) -> list[dict[str, Any]]:
     """Árvore de features do documento ativo (nome, tipo, suprimida)."""
     model = _model(_active_doc(app))

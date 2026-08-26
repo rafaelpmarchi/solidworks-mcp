@@ -33,6 +33,7 @@ def build_server() -> MCPServer:
         read_drawing,
         read_model,
         review,
+        script,
     )
 
     connection.register(mcp, session)
@@ -44,6 +45,7 @@ def build_server() -> MCPServer:
     output.register(mcp, session)
     assembly.register(mcp, session)
     create_drawing.register(mcp, session)
+    script.register(mcp, session)
 
     return mcp
 

@@ -55,6 +55,89 @@ def insert_component(app: Any, path: str, x_mm: float = 0, y_mm: float = 0, z_mm
     return {"component": com_call(cast_to(comp, "IComponent2"), "Name2"), "path": path}
 
 
+def list_components(app: Any) -> list[dict[str, Any]]:
+    """Componentes de topo da montagem ativa (nome, arquivo, suprimido, fixo)."""
+    asm = _assembly(app)
+    c = swconst()
+    out = []
+    for raw in com_call(asm, "GetComponents", True) or ():
+        comp = cast_to(raw, "IComponent2")
+        out.append({
+            "name": com_call(comp, "Name2"),
+            "path": com_call(comp, "GetPathName"),
+            "suppressed": com_call(comp, "GetSuppression2") == c.swComponentSuppressed,
+            "fixed": bool(com_call(comp, "IsFixed")),
+        })
+    return out
+
+
+def _find_component(app: Any, name: str) -> Any:
+    asm = _assembly(app)
+    for raw in com_call(asm, "GetComponents", True) or ():
+        comp = cast_to(raw, "IComponent2")
+        if com_call(comp, "Name2") == name:
+            return comp
+    raise ComCallError("GetComponents", (name,), None,
+                       "componente não encontrado — use list_components para os nomes")
+
+
+def set_component_suppressed(app: Any, name: str, suppressed: bool) -> None:
+    comp = _find_component(app, name)
+    c = swconst()
+    state = c.swComponentSuppressed if suppressed else c.swComponentFullyResolved
+    result = com_call(comp, "SetSuppression2", state)
+    log.info("SetSuppression2(%s, %s) -> %s", name, suppressed, result)
+
+
+def set_component_fixed(app: Any, name: str, fixed: bool) -> None:
+    asm = _assembly(app)
+    comp = _find_component(app, name)
+    com_call(comp, "Select4", False, None, False)
+    com_call(asm, "FixComponent" if fixed else "UnfixComponent")
+
+
+def move_component(app: Any, name: str, dx_mm: float, dy_mm: float, dz_mm: float) -> None:
+    """Translada um componente (soma ao transform atual). Mates podem limitar."""
+    comp = _find_component(app, name)
+    xform = com_get(comp, "Transform2")
+    if xform is None:
+        raise ComCallError("Transform2", (name,), None, "sem transform — componente suprimido?")
+    data = list(com_call(cast_to(xform, "IMathTransform"), "ArrayData"))
+    data[9] += units.from_mm(dx_mm)
+    data[10] += units.from_mm(dy_mm)
+    data[11] += units.from_mm(dz_mm)
+    import win32com.client
+
+    math_util = com_call(app, "GetMathUtility")
+    new_xform = com_call(cast_to(math_util, "IMathUtility"), "CreateTransform",
+                         win32com.client.VARIANT(8197, data))
+    comp.Transform2 = new_xform
+    com_call(_model(_active_doc(app)), "EditRebuild3")
+
+
+def check_interference(app: Any) -> list[dict[str, Any]]:
+    """Detecção de interferência entre componentes da montagem ativa."""
+    asm = _assembly(app)
+    mgr = com_call(asm, "InterferenceDetectionManager")
+    if mgr is None:
+        raise ComCallError("InterferenceDetectionManager", (), None, "indisponível nesta versão")
+    mgr = cast_to(mgr, "IInterferenceDetectionMgr")
+    mgr.TreatCoincidenceAsInterference = False
+    mgr.IncludeMultibodyPartInterferences = True
+    raw = com_call(mgr, "GetInterferences")
+    out = []
+    for item in raw or ():
+        inter = cast_to(item, "IInterference")
+        comps = com_call(inter, "Components")
+        names = []
+        for craw in comps or ():
+            names.append(com_call(cast_to(craw, "IComponent2"), "Name2"))
+        volume = com_get(inter, "Volume")  # m³
+        out.append({"components": names, "volume_mm3": round(volume * 1e9, 3)})
+    com_call(mgr, "Done")
+    return out
+
+
 def add_mate(app: Any, mate_type: str, distance_mm: float = 0.0, angle_deg: float = 0.0,
              flip: bool = False) -> str:
     """Cria um mate entre as DUAS entidades selecionadas (select_entity com append).

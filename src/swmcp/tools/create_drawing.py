@@ -25,3 +25,19 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         return session.run(
             lambda app: db.create_drawing_from_model(app, model_path, views, template or None, import_annotations)
         )
+
+    @mcp.tool()
+    def add_projected_view(source_view: str, x_mm: float, y_mm: float) -> dict[str, str]:
+        """Vista projetada no desenho ativo a partir de uma vista existente
+        (nome via get_drawing_dump); posição em mm define a direção."""
+        return {"view": session.run(lambda app: db.add_projected_view(app, source_view, x_mm, y_mm))}
+
+    @mcp.tool()
+    def insert_drawing_note(text: str, x_mm: float, y_mm: float) -> dict[str, str]:
+        """Nota de texto na folha ativa do desenho, na posição (x,y) mm."""
+        return {"note": session.run(lambda app: db.insert_drawing_note(app, text, x_mm, y_mm))}
+
+    @mcp.tool()
+    def set_sheet_scale(numerator: float, denominator: float) -> dict[str, str]:
+        """Muda a escala da folha ativa do desenho (ex.: 1 e 2 para 1:2)."""
+        return session.run(lambda app: db.set_sheet_scale(app, numerator, denominator))

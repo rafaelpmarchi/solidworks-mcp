@@ -55,6 +55,22 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         return {"deleted": True}
 
     @mcp.tool()
+    def list_equations() -> list[dict[str, Any]]:
+        """Equações e variáveis globais do documento ativo."""
+        return session.run(e.list_equations)
+
+    @mcp.tool()
+    def set_equation(index: int, equation: str) -> dict[str, Any]:
+        """Substitui a equação no índice (veja list_equations). Formato:
+        '\"D1@Esboço1\" = \"espessura\" * 2'. Reconstrói em seguida."""
+        return session.run(lambda app: e.set_equation(app, index, equation))
+
+    @mcp.tool()
+    def add_equation(equation: str) -> dict[str, Any]:
+        """Adiciona equação/variável global (ex.: '\"espessura\" = 5mm')."""
+        return session.run(lambda app: e.add_equation(app, equation))
+
+    @mcp.tool()
     def activate_configuration(name: str) -> dict[str, bool]:
         """Ativa uma configuração do documento ativo pelo nome."""
         session.run(lambda app: e.activate_configuration(app, name))

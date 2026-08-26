@@ -128,3 +128,105 @@ def register(mcp: MCPServer, session: SwSession) -> None:
     def rebuild() -> dict[str, bool]:
         """Reconstrói o documento ativo (Ctrl+B). Retorna se reconstruiu sem erro."""
         return {"rebuilt": session.run(m.rebuild)}
+
+    @mcp.tool()
+    def sketch_point(x: float, y: float) -> dict[str, bool]:
+        """Ponto no sketch ativo (mm)."""
+        session.run(lambda app: m.sketch_point(app, x, y))
+        return {"ok": True}
+
+    @mcp.tool()
+    def sketch_ellipse(xc: float, yc: float, major_radius: float, minor_radius: float) -> dict[str, bool]:
+        """Elipse no sketch ativo (centro e semieixos em mm; maior no eixo X)."""
+        session.run(lambda app: m.sketch_ellipse(app, xc, yc, major_radius, minor_radius))
+        return {"ok": True}
+
+    @mcp.tool()
+    def sketch_slot(x1: float, y1: float, x2: float, y2: float, width: float) -> dict[str, bool]:
+        """Rasgo (slot) reto entre dois centros com a largura dada (mm)."""
+        session.run(lambda app: m.sketch_slot(app, x1, y1, x2, y2, width))
+        return {"ok": True}
+
+    @mcp.tool()
+    def sketch_spline(points_mm: list[list[float]]) -> dict[str, bool]:
+        """Spline pelos pontos [[x,y], ...] em mm (mínimo 3 pontos)."""
+        session.run(lambda app: m.sketch_spline(app, points_mm))
+        return {"ok": True}
+
+    @mcp.tool()
+    def sketch_text(x: float, y: float, text: str, height_mm: float = 5.0) -> dict[str, bool]:
+        """Texto de sketch em (x,y) — pode ser extrudado para gravação em relevo."""
+        session.run(lambda app: m.sketch_text(app, x, y, text, height_mm))
+        return {"ok": True}
+
+    @mcp.tool()
+    def sketch_fillet(radius_mm: float) -> dict[str, bool]:
+        """Arredonda o canto entre as DUAS entidades de sketch selecionadas
+        (select_entity type='SKETCHSEGMENT' com append)."""
+        session.run(lambda app: m.sketch_fillet(app, radius_mm))
+        return {"ok": True}
+
+    @mcp.tool()
+    def sketch_offset(distance_mm: float, reverse: bool = False) -> dict[str, bool]:
+        """Offset das entidades de sketch selecionadas."""
+        session.run(lambda app: m.sketch_offset(app, distance_mm, reverse))
+        return {"ok": True}
+
+    @mcp.tool()
+    def convert_entities() -> dict[str, bool]:
+        """Projeta arestas/faces selecionadas no sketch ativo (Converter entidades)."""
+        session.run(m.convert_entities)
+        return {"ok": True}
+
+    @mcp.tool()
+    def edit_sketch(sketch_name: str) -> dict[str, str]:
+        """Reabre um sketch existente para edição (use list_features para o nome;
+        feche com close_sketch ou uma feature)."""
+        return {"sketch": session.run(lambda app: m.edit_sketch(app, sketch_name))}
+
+    @mcp.tool()
+    def add_sketch_dimension(x_mm: float, y_mm: float, value_mm: float = 0) -> dict[str, str]:
+        """Cota a entidade de sketch SELECIONADA (texto da cota em x,y).
+        value_mm > 0 ajusta a geometria para esse valor."""
+        return {"dimension": session.run(
+            lambda app: m.add_sketch_dimension(app, x_mm, y_mm, value_mm or None))}
+
+    @mcp.tool()
+    def linear_pattern(count1: int, spacing1_mm: float, count2: int = 1,
+                       spacing2_mm: float = 0, flip1: bool = False, flip2: bool = False) -> dict[str, str]:
+        """Padrão linear. Antes: selecione a(s) feature(s) com select_entity
+        (type='BODYFEATURE', mark=4) e a aresta/eixo da direção 1 com mark=1
+        (direção 2 opcional, mark=2)."""
+        return {"feature": session.run(
+            lambda app: m.linear_pattern(app, count1, spacing1_mm, count2, spacing2_mm, flip1, flip2))}
+
+    @mcp.tool()
+    def circular_pattern(count: int, angle_deg: float = 360, equal_spacing: bool = True,
+                         flip: bool = False) -> dict[str, str]:
+        """Padrão circular. Antes: feature(s) com mark=4 e eixo/aresta circular
+        com mark=1 (uma aresta cilíndrica serve de eixo)."""
+        return {"feature": session.run(
+            lambda app: m.circular_pattern(app, count, angle_deg, equal_spacing, flip))}
+
+    @mcp.tool()
+    def mirror_feature() -> dict[str, str]:
+        """Espelha features. Antes: feature(s) com mark=1 e plano de espelho
+        com mark=2 (select_entity type='PLANE')."""
+        return {"feature": session.run(m.mirror_feature)}
+
+    @mcp.tool()
+    def loft(cut: bool = False) -> dict[str, str]:
+        """Loft entre perfis. Antes: selecione os sketches-perfil na ordem,
+        todos com type='SKETCH' e mark=1 (append=True)."""
+        return {"feature": session.run(lambda app: m.loft(app, cut))}
+
+    @mcp.tool()
+    def rename_feature(old_name: str, new_name: str) -> dict[str, bool]:
+        """Renomeia uma feature da árvore."""
+        session.run(lambda app: m.rename_feature(app, old_name, new_name))
+        return {"ok": True}
+
+    @mcp.tool()
+    def undo() -> dict[str, bool]:
+        """Desfaz a última ação no documento ativo (Ctrl+Z)."""
+        return {"undone": session.run(m.undo)}

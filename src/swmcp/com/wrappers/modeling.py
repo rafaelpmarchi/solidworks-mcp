@@ -244,7 +244,223 @@ def reference_plane_offset(app: Any, base_plane: str, offset_mm: float, flip: bo
     if flip:
         flag |= c.swRefPlaneReferenceConstraint_OptionFlip
     feat = com_call(fm, "InsertRefPlane", flag, units.from_mm(offset_mm), 0, 0.0, 0, 0.0)
-    return _feature_name(feat, "InsertRefPlane")
+    if feat is None:
+        raise ComCallError("InsertRefPlane", (base_plane, offset_mm), None, "plano não criado")
+    # cast IRefPlane→IFeature resolve dispid errado; nome via árvore
+    last = cast_to(com_call(model, "FeatureByPositionReverse", 0), "IFeature")
+    return com_call(last, "Name")
+
+
+def sketch_point(app: Any, x: float, y: float) -> None:
+    if com_call(_skm(app), "CreatePoint", units.from_mm(x), units.from_mm(y), 0.0) is None:
+        raise ComCallError("CreatePoint", (x, y), None, "ponto não criado")
+
+
+def sketch_ellipse(app: Any, xc: float, yc: float, major_radius: float, minor_radius: float) -> None:
+    seg = com_call(_skm(app), "CreateEllipse",
+                   units.from_mm(xc), units.from_mm(yc), 0.0,
+                   units.from_mm(xc + major_radius), units.from_mm(yc), 0.0,
+                   units.from_mm(xc), units.from_mm(yc + minor_radius), 0.0)
+    if seg is None:
+        raise ComCallError("CreateEllipse", (xc, yc), None, "elipse não criada")
+
+
+def sketch_slot(app: Any, x1: float, y1: float, x2: float, y2: float, width: float) -> None:
+    """Rasgo (slot) reto entre dois centros, com a largura dada."""
+    c = swconst()
+    segs = com_call(_skm(app), "CreateSketchSlot",
+                    c.swSketchSlotCreationType_line, c.swSketchSlotLengthType_CenterCenter,
+                    units.from_mm(width),
+                    units.from_mm(x1), units.from_mm(y1), 0.0,
+                    units.from_mm(x2), units.from_mm(y2), 0.0,
+                    0.0, 0.0, 0.0, 1, False)
+    if not segs:
+        raise ComCallError("CreateSketchSlot", (x1, y1, x2, y2, width), None, "slot não criado")
+
+
+def sketch_spline(app: Any, points_mm: list[list[float]]) -> None:
+    """Spline pelos pontos [[x,y], ...] (mínimo 3)."""
+    if len(points_mm) < 3:
+        raise ValueError("spline precisa de ao menos 3 pontos")
+    flat: list[float] = []
+    for p in points_mm:
+        flat += [units.from_mm(p[0]), units.from_mm(p[1]), 0.0]
+    import win32com.client
+
+    arr = win32com.client.VARIANT(8197, flat)  # VT_ARRAY|VT_R8
+    seg = com_call(_skm(app), "CreateSpline2", arr, True)
+    if seg is None:
+        raise ComCallError("CreateSpline2", (len(points_mm),), None, "spline não criada")
+
+
+def sketch_text(app: Any, x: float, y: float, text: str, height_mm: float = 5.0) -> None:
+    """Texto de sketch (extrudável) posicionado em (x, y)."""
+    _skm(app)  # exige sketch ativo
+    model = _model(_active_doc(app))
+    seg = com_call(model, "InsertSketchText",
+                   units.from_mm(x), units.from_mm(y), 0.0, text, 0, 0, 0, 100, 0)
+    if seg is None:
+        raise ComCallError("InsertSketchText", (text,), None, "texto não criado")
+
+
+def sketch_fillet(app: Any, radius_mm: float) -> None:
+    """Arredonda o canto entre as DUAS linhas selecionadas do sketch ativo."""
+    seg = com_call(_skm(app), "CreateFillet", units.from_mm(radius_mm),
+                   swconst().swConstrainedCornerAction_UseDefaultBehavior)
+    if seg is None:
+        raise ComCallError("CreateFillet", (radius_mm,), None,
+                           "filete de sketch não criado — duas entidades selecionadas?")
+
+
+def sketch_offset(app: Any, distance_mm: float, reverse: bool = False) -> None:
+    """Offset das entidades de sketch selecionadas."""
+    ok = com_call(_skm(app), "SketchOffset2", units.from_mm(distance_mm),
+                  reverse, True, swconst().swSkOffsetArcEndCondition,
+                  swconst().swSkOffsetMakeConstruction_No, False)
+    if not ok:
+        raise ComCallError("SketchOffset2", (distance_mm,), None, "offset falhou")
+
+
+def convert_entities(app: Any) -> None:
+    """Projeta as arestas/faces selecionadas no sketch ativo (Converter entidades)."""
+    model = _model(_active_doc(app))
+    if not com_call(model, "SketchUseEdge3", False, False):
+        raise ComCallError("SketchUseEdge3", (), None, "nada convertido — selecione arestas/face antes")
+
+
+def edit_sketch(app: Any, sketch_name: str) -> str:
+    """Reabre um sketch existente para edição (feche com exit_sketch)."""
+    model = _model(_active_doc(app))
+    com_call(model, "ClearSelection2", True)
+    ext = com_get(model, "Extension")
+    if not com_call(ext, "SelectByID2", sketch_name, "SKETCH", 0.0, 0.0, 0.0,
+                    False, 0, None, swconst().swSelectOptionDefault):
+        raise ComCallError("SelectByID2", (sketch_name,), None, "sketch não encontrado pelo nome")
+    com_call(model, "EditSketch")
+    if com_get(com_get(model, "SketchManager"), "ActiveSketch") is None:
+        raise ComCallError("EditSketch", (sketch_name,), None, "sketch não entrou em edição")
+    return sketch_name
+
+
+def add_sketch_dimension(app: Any, x_mm: float, y_mm: float, value_mm: float | None = None) -> str:
+    """Cota a entidade de sketch SELECIONADA, posicionando o texto em (x,y).
+
+    Se value_mm vier, a cota é ajustada para esse valor (dirige a geometria).
+    """
+    model = _model(_active_doc(app))
+    raw = com_call(model, "AddDimension2", units.from_mm(x_mm), units.from_mm(y_mm), 0.0)
+    if raw is None:
+        raise ComCallError("AddDimension2", (x_mm, y_mm), None,
+                           "cota não criada — selecione a entidade do sketch antes")
+    dd = cast_to(raw, "IDisplayDimension")
+    dim = cast_to(com_call(dd, "GetDimension2", 0), "IDimension")
+    name = com_get(dim, "FullName")
+    if value_mm is not None:
+        com_call(dim, "SetSystemValue3", units.from_mm(value_mm),
+                 swconst().swSetValue_InThisConfiguration, None)
+        com_call(model, "EditRebuild3")
+    return name
+
+
+# ------------------------------------------------------- features avançadas
+
+def linear_pattern(app: Any, count1: int, spacing1_mm: float, count2: int = 1,
+                   spacing2_mm: float = 0.0, flip1: bool = False, flip2: bool = False) -> str:
+    """Padrão linear das features selecionadas.
+
+    Seleção esperada: features com mark=4; direção 1 (aresta/eixo) mark=1;
+    direção 2 opcional mark=2.
+    """
+    fm = com_get(_model(_active_doc(app)), "FeatureManager")
+    # (Num1, Spacing1, Num2, Spacing2, FlipDir1, FlipDir2, DName1, DName2,
+    #  GeometryPattern, VaryInstance, HasOffset1, HasOffset2, CtrlByNum1,
+    #  CtrlByNum2, FromCentroid1, FromCentroid2, RevOffset1, RevOffset2,
+    #  Offset1, Offset2)
+    feat = com_call(
+        fm, "FeatureLinearPattern4",
+        count1, units.from_mm(spacing1_mm), count2, units.from_mm(spacing2_mm),
+        flip1, flip2, "NULL", "NULL",
+        False, False, False, False, True, True, False, False, False, False, 0.0, 0.0,
+    )
+    return _feature_name(feat, "FeatureLinearPattern4")
+
+
+def circular_pattern(app: Any, count: int, angle_deg: float = 360.0,
+                     equal_spacing: bool = True, flip: bool = False) -> str:
+    """Padrão circular das features selecionadas.
+
+    Seleção esperada: features mark=4; eixo/aresta circular mark=1.
+    """
+    fm = com_get(_model(_active_doc(app)), "FeatureManager")
+    # (Number, Spacing, FlipDirection, DName, GeometryPattern, EqualSpacing,
+    #  VaryInstance, SyncSubAssemblies, BDir2, BSymmetric, Number2, Spacing2,
+    #  DName2, EqualSpacing2)
+    feat = com_call(
+        fm, "FeatureCircularPattern5",
+        count, units.from_deg(angle_deg), flip, "NULL", False, equal_spacing,
+        False, False, False, False, 1, 0.0, "NULL", False,
+    )
+    return _feature_name(feat, "FeatureCircularPattern5")
+
+
+def mirror_feature(app: Any) -> str:
+    """Espelha as features selecionadas (mark=1) pelo plano selecionado (mark=2)."""
+    fm = com_get(_model(_active_doc(app)), "FeatureManager")
+    feat = com_call(fm, "InsertMirrorFeature2", False, False, False, False,
+                    swconst().swFeatureScope_AllBodies)
+    return _feature_name(feat, "InsertMirrorFeature2")
+
+
+def sweep(app: Any, cut: bool = False) -> str:
+    """Varredura: perfil selecionado com mark=1 e caminho com mark=4."""
+    model = _model(_active_doc(app))
+    fm = com_get(model, "FeatureManager")
+    c = swconst()
+    data = com_call(fm, "CreateDefinition",
+                    c.swFmSweepCut if cut else c.swFmSweep)
+    if data is None:
+        raise ComCallError("CreateDefinition", ("sweep",), None, "definição de sweep indisponível")
+    feat = com_call(fm, "CreateFeature", data)
+    return _feature_name(feat, "CreateFeature(sweep)")
+
+
+def loft(app: Any, cut: bool = False) -> str:
+    """Loft entre perfis selecionados (todos com mark=1, na ordem)."""
+    model = _model(_active_doc(app))
+    fm = com_get(model, "FeatureManager")
+    # (Closed, KeepTangency, ForceNonRational, TessToleranceFactor,
+    #  StartMatchingType, EndMatchingType, StartTangentLength, EndTangentLength,
+    #  StartTangentDir, EndTangentDir, IsThinBody, Thickness1, Thickness2,
+    #  ThinType, Merge, UseFeatScope, UseAutoSelect, GuideCurveInfluence)
+    if cut:
+        feat = com_call(fm, "InsertCutBlend2",
+                        False, True, False, 1.0, 0, 0, 1.0, 1.0, True, True,
+                        False, 0.0, 0.0, 0, True, True, True, 0)
+    else:
+        feat = com_call(fm, "InsertProtrusionBlend2",
+                        False, True, False, 1.0, 0, 0, 1.0, 1.0, True, True,
+                        False, 0.0, 0.0, 0, True, True, True, 0)
+    if feat is None:
+        raise ComCallError("InsertBlend2", (), None,
+                           "loft não criado — os perfis estão selecionados (mark=1) na ordem?")
+    last = cast_to(com_call(model, "FeatureByPositionReverse", 0), "IFeature")
+    return com_call(last, "Name")
+
+
+def rename_feature(app: Any, old_name: str, new_name: str) -> None:
+    model = _model(_active_doc(app))
+    raw = com_call(model, "FirstFeature")
+    while raw is not None:
+        feat = cast_to(raw, "IFeature")
+        if com_call(feat, "Name") == old_name:
+            feat.Name = new_name
+            return
+        raw = com_call(feat, "GetNextFeature")
+    raise ComCallError("rename_feature", (old_name,), None, "feature não encontrada")
+
+
+def undo(app: Any) -> bool:
+    return bool(com_call(_model(_active_doc(app)), "EditUndo2", 1))
 
 
 def rebuild(app: Any) -> bool:
