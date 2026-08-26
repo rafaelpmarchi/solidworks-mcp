@@ -1,0 +1,36 @@
+[project]
+name = "solidworks-mcp"
+version = "0.1.0"
+description = "Servidor MCP que expõe o SolidWorks (COM) como ferramentas para o Claude Code — leitura, revisão e criação de desenhos 2D"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp>=2",
+    "pydantic>=2.7",
+    "pywin32>=308; sys_platform == 'win32'",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+swmcp = "swmcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+swmcp = ["review/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+markers = [
+    "integration: exige SolidWorks aberto na máquina (não roda por padrão)",
+]
