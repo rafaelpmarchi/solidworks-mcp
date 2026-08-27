@@ -16,6 +16,14 @@ de modelagem: new_document → create_sketch(plano) → sketch_* → extrude/rev
 → take_screenshot para conferir o resultado visualmente. O SolidWorks precisa
 estar instalado nesta máquina; se não houver instância aberta, uma nova é
 iniciada visível ao usuário.
+
+Engenharia reversa (tools mesh_*): trabalham numa malha de scanner 3D
+(STL/OBJ/PLY em mm) processada por um motor em subprocesso — nada disso toca
+o SolidWorks até mesh_section_to_sketch/mesh_primitive_to_sw. Fluxo:
+mesh_import → mesh_align (assentar a peça nos eixos) → mesh_segment →
+mesh_fit_primitive nas regiões lisas → materializar no SW → modelar → exportar
+STL do modelo → mesh_deviation_map para conferir o desvio scan × CAD.
+Lacuna de scan aparece como 'sem dado' no mapa — não é interpolada.
 """
 
 
@@ -29,6 +37,7 @@ def build_server() -> MCPServer:
         create,
         create_drawing,
         edit,
+        mesh,
         output,
         read_drawing,
         read_model,
@@ -46,6 +55,7 @@ def build_server() -> MCPServer:
     assembly.register(mcp, session)
     create_drawing.register(mcp, session)
     script.register(mcp, session)
+    mesh.register(mcp, session)
 
     return mcp
 

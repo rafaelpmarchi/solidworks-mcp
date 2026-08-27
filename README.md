@@ -21,6 +21,15 @@ py -3.14 -m venv .venv
 claude mcp add solidworks -- C:\Users\peron\Documents\Github\solidworks\.venv\Scripts\python.exe -m swmcp.server
 ```
 
+## Engenharia reversa (scan 3D → sólido)
+
+Tools `mesh_*` transformam malha de scanner (Creality Raptor Pro, STL/OBJ/PLY
+em mm) em geometria nativa: alinhamento, segmentação usinado × fundido, RANSAC
+de primitivas, seções → sketch, freeform → STEP e mapa de desvio scan × CAD.
+O processamento roda num motor em subprocesso com venv próprio — ver
+[docs/engenharia-reversa.md](docs/engenharia-reversa.md) (instalação do venv
+`engine/.venv` incluída).
+
 ## Testes
 
 ```powershell

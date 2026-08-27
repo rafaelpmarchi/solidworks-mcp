@@ -9,3 +9,6 @@ logs/
 addin/bin/
 addin/obj/
 addin/register.log
+addin-scan/bin/
+addin-scan/obj/
+engine/.venv/

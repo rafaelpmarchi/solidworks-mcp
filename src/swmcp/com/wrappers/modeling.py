@@ -293,6 +293,37 @@ def sketch_spline(app: Any, points_mm: list[list[float]]) -> None:
         raise ComCallError("CreateSpline2", (len(points_mm),), None, "spline não criada")
 
 
+def sketch_3d_splines(app: Any, curves_mm: list[list[list[float]]]) -> str:
+    """Sketch 3D novo com uma spline por curva ([[x,y,z], ...] em mm cada).
+
+    Usado pelo 3D Sketch sobre o scan: as curvas vêm do viewer com os pontos
+    grudados na malha."""
+    import win32com.client
+
+    model = _model(_active_doc(app))
+    skm = com_get(model, "SketchManager")
+    com_call(skm, "Insert3DSketch", True)
+    if com_get(skm, "ActiveSketch") is None:
+        raise ComCallError("Insert3DSketch", (), None, "sketch 3D não abriu")
+    try:
+        for pts in curves_mm:
+            if len(pts) < 2:
+                continue
+            flat: list[float] = []
+            for p in pts:
+                flat += [units.from_mm(p[0]), units.from_mm(p[1]),
+                         units.from_mm(p[2])]
+            arr = win32com.client.VARIANT(8197, flat)  # VT_ARRAY|VT_R8
+            seg = com_call(skm, "CreateSpline2", arr, True)
+            if seg is None:
+                raise ComCallError("CreateSpline2", (len(pts),), None,
+                                   "spline 3D não criada")
+    finally:
+        com_call(skm, "Insert3DSketch", True)  # fecha o sketch 3D
+    feat = cast_to(com_call(model, "FeatureByPositionReverse", 0), "IFeature")
+    return com_call(feat, "Name")
+
+
 def sketch_text(app: Any, x: float, y: float, text: str, height_mm: float = 5.0) -> None:
     """Texto de sketch (extrudável) posicionado em (x, y)."""
     _skm(app)  # exige sketch ativo

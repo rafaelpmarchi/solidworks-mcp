@@ -12,6 +12,9 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from urllib.parse import parse_qs, urlparse
+
+from swmcp.chat import panel
 from swmcp.chat.agent import ChatAgent
 from swmcp.log import setup_logging
 
@@ -37,11 +40,36 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("http %s", fmt % args)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path in ("/", "/index.html"):
+        parsed = urlparse(self.path)
+        if parsed.path in ("/", "/index.html"):
             body = (WEB_DIR / "index.html").read_bytes()
             self._respond(200, "text/html; charset=utf-8", body)
-        elif self.path == "/health":
+        elif parsed.path in ("/scan", "/scan.html"):
+            body = (WEB_DIR / "scan.html").read_bytes()
+            self._respond(200, "text/html; charset=utf-8", body)
+        elif parsed.path == "/viewer.js":
+            self._respond(200, "text/javascript",
+                          (WEB_DIR / "viewer.js").read_bytes())
+        elif parsed.path.startswith("/vendor/"):
+            nome = Path(parsed.path[len("/vendor/"):]).name  # sem traversal
+            arq = WEB_DIR / "vendor" / nome
+            if arq.is_file():
+                ctype = ("text/javascript" if nome.endswith(".js")
+                         else "application/octet-stream")
+                self._respond(200, ctype, arq.read_bytes())
+            else:
+                self._respond(404, "text/plain", b"not found")
+        elif parsed.path == "/health":
             self._respond(200, "application/json", b'{"ok": true}')
+        elif parsed.path == "/mesh/status":
+            self._json(lambda: panel.handle("status", {}))
+        elif parsed.path == "/mesh/file":
+            path = (parse_qs(parsed.query).get("path") or [""])[0]
+            served = panel.serve_file(path)
+            if served is None:
+                self._respond(404, "text/plain", b"not found")
+            else:
+                self._respond(200, served[1], served[0])
         else:
             self._respond(404, "text/plain", b"not found")
 
@@ -67,8 +95,24 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/reset":
             agent().reset()
             self._respond(200, "application/json", b'{"ok": true}')
+        elif self.path.startswith("/mesh/"):
+            route = self.path[len("/mesh/"):]
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            self._json(lambda: panel.handle(route, body))
         else:
             self._respond(404, "text/plain", b"not found")
+
+    def _json(self, fn) -> None:
+        """Executa fn() e responde JSON; exceção vira {"error": ...} com 400."""
+        try:
+            result = fn()
+            code = 200
+        except Exception as exc:  # noqa: BLE001 — fronteira HTTP do painel
+            log.exception("rota do painel falhou")
+            result, code = {"error": str(exc)}, 400
+        self._respond(code, "application/json; charset=utf-8",
+                      json.dumps(result, ensure_ascii=False).encode())
 
     def _respond(self, code: int, ctype: str, body: bytes) -> None:
         self.send_response(code)

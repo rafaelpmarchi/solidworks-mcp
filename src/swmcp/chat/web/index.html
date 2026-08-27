@@ -59,9 +59,10 @@
   <b>Claude · SolidWorks</b>
   <button id="reset" title="Limpar conversa">limpar</button></header>
 <div id="log">
-  <div class="msg bot">Olá! Estou dentro do SolidWorks. Posso ver o que está aberto
-(<code>status</code>), ler um desenho por completo, revisar com as regras da Gromar
-ou consultar propriedades de peça. O que você precisa?</div>
+  <div class="msg bot">Olá! Estou dentro do SolidWorks. Posso ler e revisar desenhos,
+modelar, e também operar a engenharia reversa (o painel Scan 3D é o add-in ao lado —
+mas você pode me pedir por texto: "importa o scan e acha os cilindros"). O que você
+precisa?</div>
 </div>
 <form id="form">
   <textarea id="input" placeholder="Ex.: revise o desenho ativo… (Enter envia, Shift+Enter quebra linha)"></textarea>
@@ -87,7 +88,12 @@ function toolLabel(name, inp) {
   const nomes = {sw_status: "consultando o SolidWorks",
                  get_drawing_dump: "lendo o desenho",
                  get_model_properties: "lendo o modelo 3D",
-                 review_drawing: "revisando o desenho"};
+                 review_drawing: "revisando o desenho",
+                 mesh_import: "importando o scan",
+                 mesh_segment: "segmentando regiões",
+                 mesh_fit_primitive: "ajustando primitiva",
+                 mesh_symmetry_plane: "procurando simetria",
+                 mesh_deviation_map: "calculando desvio"};
   return "⚙ " + (nomes[name] || name) + alvo;
 }
 
