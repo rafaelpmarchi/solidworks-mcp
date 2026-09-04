@@ -495,7 +495,7 @@ namespace SwScanAddin
             }
             else
             {
-                file = @"C:\Users\peron\Documents\Github\solidworks\.venv\Scripts\python.exe";
+                file = @"C:\Users\peron\Documents\Github\espritedge-mcp\.venv\Scripts\python.exe";
                 args = "-m swmcp.chat";
             }
             try

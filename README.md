@@ -10,16 +10,9 @@ trabalha ao lado).
 
 ## Instalação
 
-```powershell
-py -3.14 -m venv .venv
-.venv\Scripts\python -m pip install -e .[dev]
-```
-
-## Registrar no Claude Code
-
-```powershell
-claude mcp add solidworks -- C:\Users\peron\Documents\Github\solidworks\.venv\Scripts\python.exe -m swmcp.server
-```
+Este pacote vive no monorepo `espritedge-mcp` e usa o `.venv` da raiz
+(ver o README da raiz). O servidor `solidworks` (`swmcp.exe`) já está
+registrado no `.mcp.json` do monorepo.
 
 ## Engenharia reversa (scan 3D → sólido)
 
