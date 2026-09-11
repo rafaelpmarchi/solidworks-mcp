@@ -22,7 +22,21 @@ DOC_TYPE_BY_EXTENSION = {
     ".sldprt": swDocPART,
     ".sldasm": swDocASSEMBLY,
     ".slddrw": swDocDRAWING,
+    ".sldlfp": swDocPART,  # library feature part (perfil de weldment) abre como peça
 }
+
+# Documentos de biblioteca que o SolidWorks abre sozinho, em segundo plano,
+# quando uma feature os referencia (perfis de weldment .sldlfp, por exemplo).
+# Aparecem em ISldWorks::GetDocuments mas não são trabalho do usuário.
+LIBRARY_FEATURE_EXTENSIONS = frozenset({".sldlfp"})
+
+
+def is_library_document(path: str | None) -> bool:
+    """True para perfil de weldment/library feature part carregado por referência."""
+    if not path:
+        return False
+    return path.rsplit(".", 1)[-1].lower() in {e.lstrip(".") for e in LIBRARY_FEATURE_EXTENSIONS}
+
 
 # swOpenDocOptions_e
 swOpenDocOptions_Silent = 0x1

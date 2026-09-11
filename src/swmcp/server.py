@@ -24,6 +24,19 @@ mesh_import → mesh_align (assentar a peça nos eixos) → mesh_segment →
 mesh_fit_primitive nas regiões lisas → materializar no SW → modelar → exportar
 STL do modelo → mesh_deviation_map para conferir o desvio scan × CAD.
 Lacuna de scan aparece como 'sem dado' no mapa — não é interpolada.
+
+Estrutura soldada (weldment): sketch com linhas conectadas → close_sketch →
+insert_structural_member(norma, tipo, tamanho, sketch) — os nomes vêm de
+list_weldment_profiles (com filtro por norma devolve os tamanhos). A peça
+vira weldment sozinha; get_cut_list lê a lista de corte (quantidade,
+comprimento, ângulos, material) e insert_cut_list_table põe a tabela num
+desenho. normalize_tube_cut refaz a boca de lobo de um tubo como corte
+normal ao tubo (geometria de laser de tubo), na própria peça; use
+check_body_interference para conferir. File Locations (templates, formatos
+de folha, perfis) leem-se com get_file_locations e gravam-se com
+set_file_location/apply_kongz_library — configuração persistente, só com
+pedido explícito. sw_status esconde os perfis .sldlfp que o SolidWorks abre em
+segundo plano (só conta em library_documents_hidden).
 """
 
 
@@ -43,6 +56,8 @@ def build_server() -> MCPServer:
         read_model,
         review,
         script,
+        settings,
+        weldment,
     )
 
     connection.register(mcp, session)
@@ -56,6 +71,8 @@ def build_server() -> MCPServer:
     create_drawing.register(mcp, session)
     script.register(mcp, session)
     mesh.register(mcp, session)
+    weldment.register(mcp, session)
+    settings.register(mcp, session)
 
     return mcp
 

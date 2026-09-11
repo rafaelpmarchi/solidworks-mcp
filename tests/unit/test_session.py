@@ -60,3 +60,44 @@ def test_doc_type_por_extensao():
     assert doc_type_for_path("C:/x/desenho.slddrw") == 3
     with pytest.raises(ValueError, match="extensão não suportada"):
         doc_type_for_path("C:/x/arquivo.pdf")
+
+
+class _FakeDoc:
+    def __init__(self, title, path, read_only=False):
+        self._title, self._path, self._ro = title, path, read_only
+
+    def GetType(self):
+        return 1
+
+    def GetPathName(self):
+        return self._path
+
+    def GetTitle(self):
+        return self._title
+
+    def GetSaveFlag(self):
+        return False
+
+    def IsOpenedReadOnly(self):
+        return self._ro
+
+
+class _FakeApp:
+    RevisionNumber = "31.5.0"
+
+    def __init__(self, docs):
+        self._docs = docs
+        self.ActiveDoc = docs[0]
+
+    def GetDocuments(self):
+        return tuple(self._docs)
+
+
+def test_status_esconde_perfis_de_biblioteca():
+    peca = _FakeDoc("Peça1.SLDPRT", r"C:\x\Peça1.SLDPRT")
+    perfil = _FakeDoc("pipe.sldlfp", r"C:\SW\data\weldment profiles\iso\pipe.sldlfp", read_only=True)
+    st = session_mod._read_status(_FakeApp([peca, perfil, perfil]))
+    assert [d["title"] for d in st["open_documents"]] == ["Peça1.SLDPRT"]
+    assert st["library_documents_hidden"] == 2
+    assert st["active_document"]["title"] == "Peça1.SLDPRT"
+    assert st["year"] == 2023

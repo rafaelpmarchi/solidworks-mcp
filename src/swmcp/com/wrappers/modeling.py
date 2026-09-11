@@ -78,7 +78,7 @@ def insert_sketch(app: Any, plane_name: str | None = None) -> str:
         except ComCallError:
             select_entity(app, plane_name, "FACE")
     skm = com_get(model, "SketchManager")
-    com_call(skm, "InsertSketch", True)
+    _insert_sketch_retry(skm, want_open=True)
     if com_get(skm, "ActiveSketch") is None:
         raise ComCallError("InsertSketch", (plane_name,), None, "sketch não foi aberto")
     # nome via última feature da árvore (cast ISketch→IFeature resolve dispid errado)
@@ -89,7 +89,38 @@ def insert_sketch(app: Any, plane_name: str | None = None) -> str:
 def exit_sketch(app: Any) -> None:
     """Fecha o sketch ativo (confirma)."""
     skm = com_get(_model(_active_doc(app)), "SketchManager")
-    com_call(skm, "InsertSketch", True)
+    _insert_sketch_retry(skm, want_open=False)
+
+
+RPC_E_SERVERFAULT = -2147417851  # 0x80010105: o SolidWorks lançou exceção interna
+
+
+def _insert_sketch_retry(skm: Any, want_open: bool, attempts: int = 4) -> None:
+    """InsertSketch(True) com repetição.
+
+    Logo depois de abrir/fechar/ativar outro documento o SolidWorks às vezes
+    responde 0x80010105 ("the server threw an exception") a InsertSketch —
+    mas pode ter executado a ação mesmo assim (InsertSketch alterna abrir/
+    fechar), por isso o estado é conferido antes de repetir. Medido no SW2023.
+    """
+    import time
+
+    last: ComCallError | None = None
+    for i in range(attempts):
+        try:
+            com_call(skm, "InsertSketch", True)
+            return
+        except ComCallError as exc:
+            if exc.hresult != RPC_E_SERVERFAULT:
+                raise
+            last = exc
+            time.sleep(1.0 + i)
+            if (com_get(skm, "ActiveSketch") is not None) == want_open:
+                log.warning("InsertSketch respondeu 0x80010105 mas o sketch ficou no estado pedido")
+                return
+            log.warning("InsertSketch recusado pelo SolidWorks (tentativa %d/%d); repetindo", i + 1, attempts)
+    assert last is not None
+    raise last
 
 
 def _skm(app: Any) -> Any:

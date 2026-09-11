@@ -61,11 +61,19 @@ class SwSession:
     def _ensure_app(self) -> Any:
         if self._app is not None:
             try:
-                com_get(self._app, "Visible")  # ping barato: detecta app morto
-                return self._app
+                visible = com_get(self._app, "Visible")  # ping barato: detecta app morto
             except ComCallError as exc:
                 if not exc.is_disconnected:
                     raise
+                self._drop_app()
+            else:
+                # O usuário fechou o SolidWorks mas o processo ficou vivo (invisível)
+                # porque este servidor segura uma referência COM; se ele abriu outro,
+                # é nesse que as ações e configurações têm de acontecer.
+                if visible or not _visible_instances():
+                    return self._app
+                log.warning("instância %s ficou invisível; trocando para a instância visível",
+                            _pid_of(self._app))
                 self._drop_app()
         self._app = _connect()
         return self._app
@@ -81,6 +89,10 @@ def _connect() -> Any:
     import win32com.client
 
     sldworks_module()  # garante o gen_py antes do cast
+    visible = _visible_instances()
+    if visible:
+        log.info("conectado à instância visível do SolidWorks (PID %s)", _pid_of(visible[0]))
+        return visible[0]
     try:
         app = win32com.client.GetActiveObject(PROG_ID)
         log.info("conectado à instância aberta do SolidWorks")
@@ -99,6 +111,42 @@ def _connect() -> Any:
         ) from exc
     app.Visible = True  # o SolidWorks fica sempre visível ao usuário (Visão §1)
     return cast_to(app, "ISldWorks")
+
+
+def _visible_instances() -> list[Any]:
+    """Instâncias do SolidWorks registradas na ROT ("SolidWorks_PID_<n>") e visíveis.
+
+    GetActiveObject devolve a primeira registrada — que pode ser um processo
+    órfão, sem janela, mantido vivo por uma referência COM deste servidor.
+    """
+    import pythoncom
+    import win32com.client
+
+    out = []
+    try:
+        rot = pythoncom.GetRunningObjectTable()
+        ctx = pythoncom.CreateBindCtx(0)
+        for moniker in rot.EnumRunning():
+            name = moniker.GetDisplayName(ctx, None)
+            if not name.startswith("SolidWorks_PID_"):
+                continue
+            try:
+                obj = rot.GetObject(moniker)
+                app = cast_to(win32com.client.Dispatch(obj.QueryInterface(pythoncom.IID_IDispatch)), "ISldWorks")
+                if com_get(app, "Visible"):
+                    out.append(app)
+            except Exception as exc:  # instância morrendo: ignora
+                log.debug("instância %s ignorada: %s", name, exc)
+    except Exception as exc:
+        log.debug("ROT indisponível: %s", exc)
+    return out
+
+
+def _pid_of(app: Any) -> Any:
+    try:
+        return com_call(app, "GetProcessID")
+    except Exception:
+        return "?"
 
 
 SLDWORKS_TLB = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\sldworks.tlb"
@@ -163,9 +211,17 @@ def _read_status(app: Any) -> dict[str, Any]:
     year = constants.revision_to_year(revision)
 
     docs = []
+    hidden = 0
     raw_docs = com_call(app, "GetDocuments")
     for doc in raw_docs or ():
-        docs.append(_doc_summary(doc))
+        summary = _doc_summary(doc)
+        # perfis de weldment (.sldlfp) etc. entram na lista do SW sozinhos,
+        # em somente-leitura, um por perfil usado — poluem o status sem
+        # informar nada: só o total é reportado
+        if constants.is_library_document(summary["path"]):
+            hidden += 1
+            continue
+        docs.append(summary)
 
     active = com_get(app, "ActiveDoc")
     return {
@@ -173,6 +229,7 @@ def _read_status(app: Any) -> dict[str, Any]:
         "revision": revision,
         "year": year,
         "open_documents": docs,
+        "library_documents_hidden": hidden,
         "active_document": _doc_summary(active) if active is not None else None,
     }
 

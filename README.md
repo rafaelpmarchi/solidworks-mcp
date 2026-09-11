@@ -23,6 +23,17 @@ O processamento roda num motor em subprocesso com venv próprio — ver
 [docs/engenharia-reversa.md](docs/engenharia-reversa.md) (instalação do venv
 `engine/.venv` incluída).
 
+## Estruturas soldadas (weldment)
+
+`list_weldment_profiles` → `insert_structural_member` (sketch de linhas +
+norma/tipo/tamanho) → `get_cut_list`; `insert_cut_list_table` põe a lista no
+desenho. `normalize_tube_cut` refaz a boca de lobo como corte normal ao tubo
+(laser de tubo), `check_body_interference` confere e `create_weldment_profile`
+cria perfis novos (.SLDLFP) na biblioteca. File Locations do
+SolidWorks: `get_file_locations`, `set_file_location`, `apply_kongz_library`.
+Detalhes e armadilhas da API em
+[docs/decisoes/0005-weldments.md](docs/decisoes/0005-weldments.md).
+
 ## Testes
 
 ```powershell
