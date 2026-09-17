@@ -821,8 +821,19 @@ def create_weldment_profile(
         ext = com_get(model, "Extension")
         skm = com_get(model, "SketchManager")
         sketch_name = m.insert_sketch(app, "Plano frontal")
-        ok = draw(skm)
-        com_call(skm, "CreatePoint", 0.0, 0.0, 0.0)
+        # sem AddToDB o snap funde a geometria interna na externa quando a parede
+        # é fina (tubo 38.1 x 1.2 saía com os dois círculos de mesmo raio)
+        _com_set(skm, "AddToDB", True)
+        try:
+            ok = draw(skm)
+            com_call(skm, "CreatePoint", 0.0, 0.0, 0.0)
+        finally:
+            _com_set(skm, "AddToDB", False)
+        sk = cast_to(com_call(model, "GetActiveSketch2"), "ISketch")
+        lengths = sorted(round(com_call(cast_to(s, "ISketchSegment"), "GetLength"), 9)
+                         for s in (com_call(sk, "GetSketchSegments") or ()))
+        if len(set(lengths)) != len(lengths) and shape == "round_tube":
+            ok = False
         m.exit_sketch(app)
         if not ok:
             raise ComCallError("sketch", (shape,), None, "geometria do perfil não foi desenhada")
