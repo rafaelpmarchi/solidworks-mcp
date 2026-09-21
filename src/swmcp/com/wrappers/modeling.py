@@ -15,6 +15,7 @@ from typing import Any
 from swmcp.com import units
 from swmcp.com.invoke import ComCallError, com_call, com_get
 from swmcp.com.session import cast_to, swconst
+from swmcp.domain.corners import EdgeCandidate, select_corner_edges
 
 log = logging.getLogger(__name__)
 
@@ -244,6 +245,163 @@ def fillet(app: Any, radius_mm: float) -> str:
         None, None, None, None, None, None, None,
     )
     return _feature_name(feat, "FeatureFillet3")
+
+
+# ------------------------------------------------------------ cantos de abertura
+
+def _feature_by_name(model: Any, name: str) -> Any:
+    raw = com_call(model, "FirstFeature")
+    while raw is not None:
+        feat = cast_to(raw, "IFeature")
+        if com_call(feat, "Name") == name:
+            return feat
+        raw = com_call(feat, "GetNextFeature")
+    raise ComCallError("FeatureByName", (name,), None, "feature não existe no documento ativo (use list_features)")
+
+
+def _point_mm(pt: Any) -> tuple[float, float, float]:
+    return (units.to_mm(pt[0]), units.to_mm(pt[1]), units.to_mm(pt[2]))
+
+
+def _edge_candidate(edge: Any, plate_normal: tuple[float, float, float]) -> EdgeCandidate | None:
+    """Descreve uma aresta para o domínio; None para aresta fechada (círculo inteiro)."""
+    v1 = com_call(edge, "GetStartVertex")
+    v2 = com_call(edge, "GetEndVertex")
+    if v1 is None or v2 is None:
+        return None
+    start = _point_mm(com_call(cast_to(v1, "IVertex"), "GetPoint"))
+    end = _point_mm(com_call(cast_to(v2, "IVertex"), "GetPoint"))
+    # GetCurve().IsLine() responde 0x80010108 (objeto desconectado) em parte das
+    # arestas vindas de IVertex.GetEdges; o tipo em GetCurveParams3 é estável.
+    params = cast_to(com_call(edge, "GetCurveParams3"), "ICurveParamData")
+    is_line = com_get(params, "CurveType") == swconst().LINE_TYPE
+    mid_m = tuple(units.from_mm((start[k] + end[k]) / 2.0) for k in range(3))
+    normals: list[tuple[float, float, float]] = []
+    for raw_face in com_call(edge, "GetTwoAdjacentFaces2") or []:
+        surf = cast_to(com_call(cast_to(raw_face, "IFace2"), "GetSurface"), "ISurface")
+        ev = com_call(surf, "EvaluateAtPoint", *mid_m)  # [nx, ny, nz, ...]
+        if ev:
+            normals.append((ev[0], ev[1], ev[2]))
+    return EdgeCandidate(start=start, end=end, plate_normal=plate_normal,
+                         face_normals=tuple(normals), is_line=is_line)
+
+
+def _opening_corner_candidates(feature: Any, include_outer: bool) -> tuple[list[EdgeCandidate], list[Any], int]:
+    """Arestas que chegam aos vértices dos contornos das aberturas nas faces planas da feature.
+
+    Devolve (candidatos, objetos IEdge na mesma ordem, nº de faces de chapa achadas).
+    """
+    cands: list[EdgeCandidate] = []
+    edge_objs: list[Any] = []
+    seen_vertices: set[tuple[float, float, float]] = set()
+    n_plate_faces = 0
+    for raw_face in com_call(feature, "GetFaces") or []:
+        face = cast_to(raw_face, "IFace2")
+        surf = cast_to(com_call(face, "GetSurface"), "ISurface")
+        if not com_call(surf, "IsPlane"):
+            continue
+        loops = [cast_to(lp, "ILoop2") for lp in (com_call(face, "GetLoops") or [])]
+        wanted = loops if include_outer else [lp for lp in loops if not com_call(lp, "IsOuter")]
+        if not wanted:
+            continue
+        pp = com_call(surf, "PlaneParams")  # [nx, ny, nz, px, py, pz]
+        normal = (pp[0], pp[1], pp[2])
+        n_plate_faces += 1
+        for loop in wanted:
+            for raw_edge in com_call(loop, "GetEdges") or []:
+                loop_edge = cast_to(raw_edge, "IEdge")
+                for getter in ("GetStartVertex", "GetEndVertex"):
+                    raw_v = com_call(loop_edge, getter)
+                    if raw_v is None:
+                        continue  # contorno fechado (furo redondo) não tem canto
+                    vertex = cast_to(raw_v, "IVertex")
+                    key = tuple(round(x, 3) for x in _point_mm(com_call(vertex, "GetPoint")))
+                    if key in seen_vertices:
+                        continue
+                    seen_vertices.add(key)
+                    for raw_e in com_call(vertex, "GetEdges") or []:
+                        edge = cast_to(raw_e, "IEdge")
+                        cand = _edge_candidate(edge, normal)
+                        if cand is not None:
+                            cands.append(cand)
+                            edge_objs.append(edge)
+    return cands, edge_objs, n_plate_faces
+
+
+FILLET_ERROR_NO_EDGE = 13  # swFeatureErrorFilletNoEdge: o SW descartou arestas do filete
+
+
+def fillet_opening_corners(
+    app: Any,
+    feature_name: str,
+    radius_mm: float,
+    region_mm: list[float] | None = None,
+    include_outer: bool = False,
+    preview: bool = False,
+) -> dict[str, Any]:
+    """Filete de raio constante em TODOS os cantos das aberturas de uma chapa.
+
+    Os cantos são as arestas retas que atravessam a espessura nos contornos
+    internos (furos/fendas/grelhas) das faces planas da feature. Arestas
+    tangentes (costura de furo redondo, filete já existente) são ignoradas,
+    então chamar de novo não duplica nada. Uma feature de filete por chamada.
+    """
+    if radius_mm <= 0:
+        raise ValueError("radius_mm precisa ser positivo")
+    model = _model(_active_doc(app))
+    feat = _feature_by_name(model, feature_name)
+    cands, edge_objs, n_plate = _opening_corner_candidates(feat, include_outer)
+    if n_plate == 0:
+        raise ComCallError(
+            "fillet_opening_corners", (feature_name,), None,
+            "a feature não tem face plana com contorno interno — não é uma chapa com "
+            "abertura fechada (furo/fenda/grelha). Aberturas que tocam a borda entram "
+            "só com include_outer=True",
+        )
+    sel = select_corner_edges(cands, region_mm)
+    result: dict[str, Any] = {
+        "source_feature": feature_name,
+        "corners": len(sel.corners),
+        "corner_points_mm": [[round(v, 2) for v in c.mid] for c in sel.corners],
+        "thickness_mm": sorted({c.length_mm for c in sel.corners}),
+        "skipped": sel.skipped,
+        "fillet": None,
+    }
+    if preview:
+        return result
+    if not sel.corners:
+        raise ComCallError(
+            "fillet_opening_corners", (feature_name, radius_mm), None,
+            f"nenhum canto vivo encontrado (descartes: {sel.skipped}) — já filetado? região errada?",
+        )
+
+    com_call(model, "ClearSelection2", True)
+    selmgr = cast_to(com_get(model, "SelectionManager"), "ISelectionMgr")
+    sel_data = cast_to(com_call(selmgr, "CreateSelectData"), "ISelectData")
+    sel_data.Mark = 1  # FeatureFillet3 lê as arestas com marca 1
+    for corner in sel.corners:
+        entity = cast_to(edge_objs[corner.index], "IEntity")
+        if not com_call(entity, "Select4", True, sel_data):
+            raise ComCallError("Select4", (corner.mid,), None, "aresta de canto não pôde ser selecionada")
+    n_sel = com_call(selmgr, "GetSelectedObjectCount2", -1)
+    if n_sel != len(sel.corners):
+        raise ComCallError("Select4", (n_sel, len(sel.corners)), None, "seleção incompleta das arestas de canto")
+
+    name = fillet(app, radius_mm)
+    com_call(model, "ClearSelection2", True)
+    new_feat = _feature_by_name(model, name)
+    code, is_warning = com_call(new_feat, "GetErrorCode2", True)
+    n_faces = len(com_call(new_feat, "GetFaces") or [])
+    result.update({"fillet": name, "radius_mm": radius_mm, "fillet_faces": n_faces,
+                   "error_code": int(code), "warning": bool(is_warning)})
+    if code:
+        why = ("o SolidWorks descartou arestas — raio maior que o canto permite, ou canto de "
+               "corpo separado que só encosta na chapa" if code == FILLET_ERROR_NO_EDGE
+               else "confira a árvore de features")
+        result["message"] = f"filete criado com aviso (código {code}): {why}"
+        log.warning("%s: %s", name, result["message"])
+    log.info("filete de cantos %s: R%.2f em %d cantos de %s", name, radius_mm, len(sel.corners), feature_name)
+    return result
 
 
 def chamfer(app: Any, distance_mm: float, angle_deg: float = 45.0) -> str:

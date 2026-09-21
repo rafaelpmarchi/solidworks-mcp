@@ -34,6 +34,14 @@ SolidWorks: `get_file_locations`, `set_file_location`, `apply_kongz_library`.
 Detalhes e armadilhas da API em
 [docs/decisoes/0005-weldments.md](docs/decisoes/0005-weldments.md).
 
+## Chapas com aberturas
+
+`fillet_opening_corners(feature, raio)` arredonda de uma vez todos os cantos
+das aberturas fechadas (furos, fendas, grelhas com aletas) da chapa de uma
+feature, sem selecionar aresta por aresta; `preview=True` só lista os cantos
+e `region_mm` limita a uma grelha. Ignora o que já está filetado. Armadilhas
+da API em [docs/decisoes/0006-cantos-de-abertura.md](docs/decisoes/0006-cantos-de-abertura.md).
+
 ## Testes
 
 ```powershell

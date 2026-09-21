@@ -92,6 +92,25 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         return {"feature": session.run(lambda app: m.fillet(app, radius_mm))}
 
     @mcp.tool()
+    def fillet_opening_corners(feature_name: str, radius_mm: float,
+                               region_mm: list[float] | None = None,
+                               include_outer: bool = False,
+                               preview: bool = False) -> dict[str, Any]:
+        """Arredonda TODOS os cantos das aberturas (furos, fendas, grelhas com
+        aletas) de uma chapa numa só feature de filete, sem selecionar aresta
+        por aresta. feature_name é a extrusão/corte que tem as faces da chapa
+        (use list_features). Acha as arestas retas que atravessam a espessura
+        nos contornos internos das faces planas; ignora costura de furo redondo
+        e cantos já filetados (idempotente). region_mm=[xmin,ymin,zmin,xmax,
+        ymax,zmax] limita a uma grelha; include_outer=True inclui os cantos do
+        contorno externo; preview=True só lista os cantos, sem criar nada.
+        Devolve o nome do filete, nº de cantos e aviso se o SolidWorks
+        descartou arestas (raio maior que o canto permite, ou aleta que é corpo
+        separado só encostando na chapa)."""
+        return session.run(lambda app: m.fillet_opening_corners(
+            app, feature_name, radius_mm, region_mm, include_outer, preview))
+
+    @mcp.tool()
     def chamfer_selected(distance_mm: float, angle_deg: float = 45.0) -> dict[str, str]:
         """Chanfro distância×ângulo nas arestas selecionadas."""
         return {"feature": session.run(lambda app: m.chamfer(app, distance_mm, angle_deg))}
