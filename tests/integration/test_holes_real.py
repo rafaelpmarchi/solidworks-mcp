@@ -9,6 +9,7 @@ import pytest
 
 from swmcp.com.invoke import ComCallError, com_call, com_get
 from swmcp.com.session import SwSession
+from swmcp.com.wrappers import hole_library as hl
 from swmcp.com.wrappers import holes as h
 from swmcp.com.wrappers import modeling as m
 from swmcp.com.wrappers import output as o
@@ -62,7 +63,8 @@ def test_perfil_sai_com_as_cotas_pedidas_e_contorno_fechado(session, eixo):
 
 def test_furo_do_assistente_sai_no_tamanho_pedido_e_centrado(session, eixo):
     antes = session.run(lambda app: h.measure_bodies(app))[0]["volume_mm3"]
-    furo = session.run(lambda app: h.hole_wizard(app, 0, 10, 0, 10.2, 25, "tap", 20))
+    furo = session.run(lambda app: h.hole_wizard(app, 0, 10, 0, 25, diameter_mm=10.2,
+                                                 hole_type="tap", thread_depth_mm=20))
     assert furo["position_mm"] == [0.0, 0.0]
 
     depois = session.run(lambda app: h.measure_bodies(app))[0]["volume_mm3"]
@@ -94,3 +96,28 @@ def test_corte_para_o_outro_lado_usa_reverse_e_nao_flip(session, eixo):
 def test_aresta_inexistente_falha_dizendo_o_que_fazer(session, eixo):
     with pytest.raises(ComCallError, match="list_circular_edges"):
         session.run(lambda app: h.select_circular_edge(app, [0, 0, 0], 999.0))
+
+
+def test_furo_por_tamanho_da_biblioteca(session, eixo):
+    """size='M12x1.75' tira o Ø da broca da base do SolidWorks, não de um chute."""
+    tamanho = session.run(lambda app: hl.resolve_size(app, "M12x1.75", "Ansi Metric", "tap"))
+    assert tamanho["drill_diameter_mm"] == pytest.approx(10.2)
+    assert tamanho["pitch_mm"] == pytest.approx(1.75)
+
+    antes = session.run(lambda app: h.measure_bodies(app))[0]["volume_mm3"]
+    furo = session.run(lambda app: h.hole_wizard(app, 0, 10, 0, 25, size="M12x1.75",
+                                                 standard="Ansi Metric", hole_type="tap",
+                                                 thread_depth_mm=20))
+    assert furo["drill_diameter_mm"] == pytest.approx(10.2)
+    assert furo["mode"] in ("standard", "legacy")  # legacy quando o assistente ignora a norma
+    assert furo["cosmetic_thread"]["callout"] == "M12x1.75"
+
+    depois = session.run(lambda app: h.measure_bodies(app))[0]["volume_mm3"]
+    esperado = math.pi * (10.2 / 2) ** 2 * 25
+    assert antes - depois == pytest.approx(esperado, rel=1e-3), "furo saiu com outro tamanho"
+
+
+def test_tamanho_fora_da_biblioteca_diz_onde_procurar(session, eixo):
+    with pytest.raises(ComCallError, match="não está na biblioteca"):
+        session.run(lambda app: h.hole_wizard(app, 0, 10, 0, 25, size="M13x1.9",
+                                              standard="Ansi Metric", hole_type="tap"))

@@ -28,10 +28,15 @@ cresce e both_directions cresce para os dois; flip é diferente — inverte qual
 lado do perfil vira material e num corte apaga quase tudo.
 
 Furo: hole_wizard usa o assistente de furação (simple/tap/counterbore/
-countersink/taper_tap) com o tamanho vindo dos parâmetros, porque a base de
-tamanhos do Toolbox não responde nesta instalação — pedir norma ISO devolve um
-furo em polegada com o nome certo. A rosca entra depois como cosmetic_thread
-(interna ou externa), sobre a aresta achada por list_circular_edges +
+countersink/taper_tap) com tamanho de norma — size='M20x2.5' + standard, os
+mesmos nomes do diálogo, que saem da biblioteca do SolidWorks (list_hole_sizes
+mostra os tamanhos e o Ø de broca de cada um; tamanho que falte só entra pelo
+assistente, na UI). A API do assistente valida o nome do tamanho mas às vezes
+ignora as dimensões da norma e gera um furo em polegada, então a tool confere o
+que saiu e refaz com os números da biblioteca — o campo 'mode' diz se veio
+'standard' ou 'legacy', e a geometria conferida é a pedida nos dois casos. Com
+hole_type='tap' a representação de rosca entra junto; para rosca externa (ou
+avulsa) use cosmetic_thread sobre a aresta achada por list_circular_edges +
 select_circular_edge, que casam a aresta pela geometria em vez de exigir um
 clique certeiro.
 

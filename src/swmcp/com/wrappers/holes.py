@@ -1,24 +1,33 @@
 """Furos do assistente de furação, roscas cosméticas e seleção de arestas
 circulares por geometria (escrita). Executa no thread STA.
 
-O assistente de furação nesta instalação NÃO tem a base de tamanhos do Toolbox:
-HoleWizard5 com norma real (ISO/DIN/ANSI Metric + "M20x2.5") nomeia a feature
-certo e gera a geometria de um furo em polegada, sem erro nenhum, e nem
-ModifyDefinition corrige — IWizardHoleFeatureData2 devolve 0 em todo diâmetro.
-Por isso aqui se usa o modo LEGADO do próprio assistente, que ignora a base e
-obedece aos parâmetros passados. A rosca entra como representação cosmética,
+O furo sai pelo assistente de furação com tamanho de NORMA (como no diálogo:
+Ansi Metric / Furo roscado / M20x2.5) — os números vêm da biblioteca do próprio
+SolidWorks, lida em hole_library.
+
+Só que a API não é confiável nesse caminho: medido no SW2023, HoleWizard5
+valida o nome do tamanho contra a base (aceita "M20x2.5" em Ansi Metric e
+recusa "M20", que só existe em ISO — prova de que está lendo a tabela certa) e
+mesmo assim gera um furo padrão em polegada, Ø25,4 com rebaixo Ø50,8.
+ModifyDefinition não corrige: IWizardHoleFeatureData2 devolve 0 em todo
+diâmetro. Por isso hole_wizard CONFERE o diâmetro que saiu e, quando o
+assistente ignorou a norma, refaz a feature no modo legado usando as dimensões
+da biblioteca — a peça sai certa de qualquer jeito e o retorno diz por qual
+caminho ("standard" ou "legacy"). A rosca entra como representação cosmética,
 que é o usual em desenho de fabricação.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from swmcp.com import units
 from swmcp.com.constants import ADV_WIZARD_HOLE_TYPES
 from swmcp.com.invoke import ComCallError, com_call, com_get
 from swmcp.com.session import cast_to, swconst
+from swmcp.com.wrappers import hole_library
 
 log = logging.getLogger(__name__)
 
@@ -168,70 +177,201 @@ def _position_sketch(feature: Any) -> Any:
     return achado
 
 
-def hole_wizard(
-    app: Any,
-    face_x_mm: float,
-    face_y_mm: float,
-    face_z_mm: float,
-    diameter_mm: float,
-    depth_mm: float,
-    hole_type: str = "simple",
-    thread_depth_mm: float = 0.0,
-    through_all: bool = False,
-    position_mm: list[float] | None = None,
-) -> dict[str, Any]:
-    """Furo do assistente de furação na face apontada pelas coordenadas (mm).
+def _delete_feature(app: Any, feature: Any) -> None:
+    model = _model(_active_doc(app))
+    com_call(model, "ClearSelection2", True)
+    com_call(feature, "Select2", False, 0)
+    com_call(model, "DeleteSelection", False)
 
-    hole_type: simple, tap, counterbore, countersink, taper_tap.
-    position_mm é o centro do furo NAS COORDENADAS DO SKETCH da face; o padrão
-    [0, 0] é a origem do sketch (no eixo, para uma face de extremidade).
-    Usa o modo legado do assistente: o tamanho vem de diameter_mm/depth_mm, não
-    de uma norma — sem Toolbox instalado a base de tamanhos não responde.
-    """
-    tipo = ADV_WIZARD_HOLE_TYPES.get(hole_type)
-    if tipo is None:
-        raise ComCallError("hole_wizard", (hole_type,), None,
-                           f"hole_type deve ser um de {sorted(ADV_WIZARD_HOLE_TYPES)}")
+
+def _count_cylinders(app: Any, diameter_mm: float, tolerance_mm: float = 0.05) -> int:
+    """Quantas faces cilíndricas do corpo têm esse diâmetro."""
+    total = 0
+    for raw_body in _bodies(app):
+        body = cast_to(raw_body, "IBody2")
+        for raw_face in com_call(body, "GetFaces") or []:
+            surf = cast_to(com_call(cast_to(raw_face, "IFace2"), "GetSurface"), "ISurface")
+            if com_call(surf, "IsCylinder"):
+                d = units.to_mm(com_call(surf, "CylinderParams")[6]) * 2.0
+                if abs(d - diameter_mm) <= tolerance_mm:
+                    total += 1
+    return total
+
+
+def _volume_mm3(app: Any) -> float:
+    body = cast_to(_bodies(app)[0], "IBody2")
+    return com_call(body, "GetMassProperties", 7850.0)[3] * 1e9
+
+
+# quanto o volume removido pode fugir do cilindro teórico (ponta da broca, chanfro)
+HOLE_VOLUME_TOLERANCE = 0.05
+
+
+def _move_hole_to(app: Any, feature: Any, alvo: list[float]) -> str:
+    """Leva o furo para o ponto pedido nas coordenadas do sketch da face."""
     model = _model(_active_doc(app))
     ext = com_get(model, "Extension")
-    fm = cast_to(com_get(model, "FeatureManager"), "IFeatureManager")
-    c = swconst()
-
-    select_face_at(app, face_x_mm, face_y_mm, face_z_mm)
-
-    fim = c.swEndCondThroughAll if through_all else c.swEndCondBlind
-    feat = com_call(
-        fm, "HoleWizard5",
-        c.swWzdLegacy, getattr(c, tipo), 0, "", fim,
-        units.from_mm(diameter_mm), units.from_mm(depth_mm), units.from_mm(thread_depth_mm),
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        "", False, True, True, False, False, False,
-    )
-    if feat is None:
-        raise ComCallError("HoleWizard5", (hole_type, diameter_mm, depth_mm), None,
-                           "furo não criado — o SolidWorks rejeitou a operação")
-    feature = cast_to(feat, "IFeature")
-    nome = com_get(feature, "Name")
-
-    # O assistente põe o furo onde a face foi clicada; reposiciona pelo sketch.
-    alvo = position_mm or [0.0, 0.0]
     sketch_pos = _position_sketch(feature)
     if sketch_pos is None:
-        raise ComCallError("hole_wizard", (nome,), None,
+        raise ComCallError("hole_wizard", (com_get(feature, "Name"),), None,
                            "furo criado mas sem sketch de posicionamento para centralizar")
     nome_sketch = com_get(sketch_pos, "Name")
     skm = cast_to(com_get(model, "SketchManager"), "ISketchManager")
     com_call(model, "ClearSelection2", True)
     com_call(ext, "SelectByID2", nome_sketch, "SKETCH", 0.0, 0.0, 0.0, False, 0, None,
-             c.swSelectOptionDefault)
+             swconst().swSelectOptionDefault)
     com_call(skm, "InsertSketch", True)
     sketch = cast_to(com_get(skm, "ActiveSketch"), "ISketch")
     ponto = cast_to(com_call(sketch, "GetSketchPoints2")[0], "ISketchPoint")
     com_call(ponto, "SetCoords", units.from_mm(alvo[0]), units.from_mm(alvo[1]), 0.0)
     com_call(skm, "InsertSketch", True)
     com_call(model, "ForceRebuild3", False)
-    log.info("furo %s criado: %s Ø%.2f×%.2f", hole_type, nome, diameter_mm, depth_mm)
-    return {"feature": nome, "position_sketch": nome_sketch, "position_mm": alvo}
+    return nome_sketch
+
+
+def hole_wizard(
+    app: Any,
+    face_x_mm: float,
+    face_y_mm: float,
+    face_z_mm: float,
+    depth_mm: float,
+    diameter_mm: float = 0.0,
+    size: str = "",
+    standard: str = "Ansi Metric",
+    hole_type: str = "simple",
+    thread_depth_mm: float = 0.0,
+    through_all: bool = False,
+    position_mm: list[float] | None = None,
+    add_cosmetic_thread: bool = True,
+) -> dict[str, Any]:
+    """Furo do assistente de furação na face apontada pelas coordenadas (mm).
+
+    Dois jeitos de dizer o tamanho:
+    - size="M20x2.5" (+ standard): vem da biblioteca do SolidWorks, como no
+      diálogo do assistente — o Ø da broca é o da norma, não um chute.
+    - diameter_mm: o furo é do tamanho pedido, sem norma.
+
+    hole_type: simple, tap (macho reto), counterbore, countersink, taper_tap.
+    position_mm é o centro do furo NAS COORDENADAS DO SKETCH da face; o padrão
+    [0, 0] é a origem do sketch (no eixo, numa face de extremidade).
+
+    Com size, tenta primeiro criar o furo pela norma e CONFERE o Ø que saiu:
+    medido no SW2023, o HoleWizard5 valida o nome do tamanho contra a base e
+    ainda assim gera um furo padrão em polegada (Ø25,4/Ø50,8). Quando isso
+    acontece a feature é desfeita e refeita no modo legado do assistente com as
+    dimensões da própria biblioteca — a peça sai certa de qualquer forma, e o
+    retorno diz por qual caminho ("standard" ou "legacy") ela saiu.
+    """
+    tipo_legado = ADV_WIZARD_HOLE_TYPES.get(hole_type)
+    if tipo_legado is None:
+        raise ComCallError("hole_wizard", (hole_type,), None,
+                           f"hole_type deve ser um de {sorted(ADV_WIZARD_HOLE_TYPES)}")
+    model = _model(_active_doc(app))
+    fm = cast_to(com_get(model, "FeatureManager"), "IFeatureManager")
+    c = swconst()
+    fim = c.swEndCondThroughAll if through_all else c.swEndCondBlind
+    alvo = position_mm or [0.0, 0.0]
+
+    biblioteca = None
+    if size:
+        tipo_biblioteca = "tap" if hole_type in ("tap", "taper_tap") else "simple"
+        biblioteca = hole_library.resolve_size(app, size, standard, tipo_biblioteca)
+        diameter_mm = biblioteca["drill_diameter_mm"]
+    if not diameter_mm:
+        raise ComCallError("hole_wizard", (size, diameter_mm), None,
+                           "informe size (tamanho da biblioteca) ou diameter_mm")
+
+    def cria_legado() -> Any:
+        select_face_at(app, face_x_mm, face_y_mm, face_z_mm)
+        return com_call(
+            fm, "HoleWizard5",
+            c.swWzdLegacy, getattr(c, tipo_legado), 0, "", fim,
+            units.from_mm(diameter_mm), units.from_mm(depth_mm), units.from_mm(thread_depth_mm),
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            "", False, True, True, False, False, False,
+        )
+
+    cilindros_antes = _count_cylinders(app, diameter_mm)
+    volume_antes = _volume_mm3(app)
+    esperado_mm3 = math.pi * (diameter_mm / 2.0) ** 2 * depth_mm
+
+    def furo_confere() -> str | None:
+        """None se o furo saiu como pedido; senão diz o que está errado."""
+        if _count_cylinders(app, diameter_mm) <= cilindros_antes:
+            return f"não apareceu nenhuma face Ø{diameter_mm:.2f}"
+        if not through_all:
+            removido = volume_antes - _volume_mm3(app)
+            if abs(removido - esperado_mm3) > esperado_mm3 * HOLE_VOLUME_TOLERANCE:
+                return (f"removeu {removido:.0f}mm³ onde Ø{diameter_mm:.2f}×{depth_mm:.2f} "
+                        f"pede {esperado_mm3:.0f}mm³")
+        return None
+
+    modo = "legacy"
+    feat = None
+    if biblioteca:
+        select_face_at(app, face_x_mm, face_y_mm, face_z_mm)
+        feat = com_call(
+            fm, "HoleWizard5",
+            c.swWzdTap if hole_type in ("tap", "taper_tap") else c.swWzdHole,
+            biblioteca["standard_index"],
+            hole_library.fastener_type_index(standard, biblioteca["hole_type"]),
+            biblioteca["size"], fim,
+            0.0, units.from_mm(depth_mm), units.from_mm(thread_depth_mm),
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            "", False, True, True, False, False, False,
+        )
+        if feat is not None:
+            feature = cast_to(feat, "IFeature")
+            _move_hole_to(app, feature, alvo)
+            problema = furo_confere()
+            if problema is None:
+                modo = "standard"
+            else:
+                log.warning("o assistente ignorou o tamanho %s da norma %s (%s); "
+                            "refazendo no modo legado com as dimensões da biblioteca",
+                            biblioteca["size"], standard, problema)
+                _delete_feature(app, feature)
+                feat = None
+    if feat is None:
+        feat = cria_legado()
+        modo = "legacy"
+    if feat is None:
+        raise ComCallError("HoleWizard5", (hole_type, diameter_mm, depth_mm), None,
+                           "furo não criado — o SolidWorks rejeitou a operação")
+
+    feature = cast_to(feat, "IFeature")
+    nome = com_get(feature, "Name")
+    nome_sketch = _move_hole_to(app, feature, alvo)
+    problema = furo_confere()
+    if problema is not None:
+        _delete_feature(app, feature)
+        raise ComCallError("hole_wizard", (size or diameter_mm, depth_mm), None,
+                           f"o furo saiu diferente do pedido ({problema}) — nada foi deixado na peça")
+
+    rosca = None
+    if add_cosmetic_thread and hole_type in ("tap", "taper_tap") and biblioteca:
+        centro = _hole_mouth_center(app, diameter_mm, (face_x_mm, face_y_mm, face_z_mm))
+        if centro is not None:
+            comprimento = thread_depth_mm or depth_mm
+            rosca = cosmetic_thread(app, centro, diameter_mm,
+                                    biblioteca["nominal_diameter_mm"] or diameter_mm,
+                                    comprimento, biblioteca["size"], through_all)
+    log.info("furo %s criado: %s Ø%.2f×%.2f (%s)", hole_type, nome, diameter_mm, depth_mm, modo)
+    return {"feature": nome, "position_sketch": nome_sketch, "position_mm": alvo,
+            "drill_diameter_mm": round(diameter_mm, 4), "mode": modo,
+            "library": biblioteca, "cosmetic_thread": rosca}
+
+
+def _hole_mouth_center(app: Any, diameter_mm: float,
+                       perto_de: tuple[float, float, float]) -> list[float] | None:
+    """Centro da aresta circular do furo mais próxima do ponto onde ele foi feito."""
+    melhor, menor = None, None
+    for aresta in list_circular_edges(app, diameter_mm - 0.05, diameter_mm + 0.05):
+        centro = aresta["center_mm"]
+        dist = sum((centro[i] - perto_de[i]) ** 2 for i in range(3)) ** 0.5
+        if menor is None or dist < menor:
+            melhor, menor = centro, dist
+    return melhor
 
 
 def cosmetic_thread(app: Any, center_mm: list[float], edge_diameter_mm: float,

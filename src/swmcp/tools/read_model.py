@@ -7,6 +7,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from swmcp.com.session import SwSession
+from swmcp.com.wrappers import hole_library as hl
 from swmcp.com.wrappers import holes as h
 from swmcp.services import drawing_reader
 
@@ -20,6 +21,23 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         esperado pega cota errada que não salta aos olhos na tela. A densidade
         padrão é a do aço (7850 kg/m³) e não depende do material da peça."""
         return session.run(lambda app: h.measure_bodies(app, density_kg_m3))
+
+    @mcp.tool()
+    def list_hole_sizes(standard: str = "Ansi Metric", hole_type: str = "tap",
+                        contains: str = "") -> dict[str, Any]:
+        """Tamanhos da biblioteca de furos do SolidWorks (a base do assistente
+        de furação), como o diálogo os lista: nome, Ø nominal, passo e Ø da
+        broca. Somente-leitura. standard: Ansi Metric, ISO, DIN, JIS, Ansi Inch;
+        hole_type: tap (furo roscado) ou simple (tamanhos de broca). contains
+        filtra pelo nome ('M20'). Use o nome daqui no size do hole_wizard — se o
+        tamanho não estiver na lista, ele precisa ser acrescentado à biblioteca
+        pelo assistente de furação do SolidWorks."""
+        itens = session.run(lambda app: hl.list_sizes(app, standard, hole_type))
+        if contains:
+            itens = [i for i in itens if contains.lower() in i["size"].lower()]
+        return {"standard": standard, "hole_type": hole_type,
+                "database": session.run(lambda app: str(hl.database_path(app))),
+                "count": len(itens), "sizes": itens}
 
     @mcp.tool()
     def list_circular_edges(min_diameter_mm: float = 0.0,

@@ -177,22 +177,27 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         return session.run(lambda app: h.select_face_at(app, x_mm, y_mm, z_mm, append, tolerance_mm))
 
     @mcp.tool()
-    def hole_wizard(face_x_mm: float, face_y_mm: float, face_z_mm: float,
-                    diameter_mm: float, depth_mm: float, hole_type: str = "simple",
-                    thread_depth_mm: float = 0, through_all: bool = False,
-                    position_mm: list[float] | None = None) -> dict[str, Any]:
+    def hole_wizard(face_x_mm: float, face_y_mm: float, face_z_mm: float, depth_mm: float,
+                    diameter_mm: float = 0, size: str = "", standard: str = "Ansi Metric",
+                    hole_type: str = "simple", thread_depth_mm: float = 0,
+                    through_all: bool = False, position_mm: list[float] | None = None,
+                    add_cosmetic_thread: bool = True) -> dict[str, Any]:
         """Furo pelo ASSISTENTE DE FURAÇÃO na face apontada pelas coordenadas (mm).
+        Diga o tamanho de um dos dois jeitos: size='M20x2.5' (+ standard, como no
+        diálogo do assistente — o Ø da broca vem da biblioteca do SolidWorks; veja
+        list_hole_sizes) ou diameter_mm avulso.
         hole_type: simple, tap (macho reto), counterbore, countersink, taper_tap.
+        thread_depth_mm é o comprimento roscado; com size e hole_type='tap' a
+        representação de rosca entra junto (add_cosmetic_thread).
         position_mm é o centro do furo nas coordenadas do sketch da face — o
         padrão [0,0] é a origem (no eixo, numa face de extremidade).
-        O tamanho vem de diameter_mm/depth_mm e NÃO de uma norma: sem o Toolbox
-        instalado a base de tamanhos não responde e pedir 'M20 ISO' gera um furo
-        em polegada com o nome certo. Para o macho, diameter_mm é o Ø da broca
-        (M20x2,5 → 17,5) e thread_depth_mm o comprimento roscado; a rosca em si
-        se acrescenta com cosmetic_thread."""
+        O retorno traz 'mode': 'standard' quando o furo saiu pela norma e
+        'legacy' quando o assistente ignorou o tamanho da norma (acontece nesta
+        instalação: ele gera Ø25,4) e a tool refez com as dimensões da
+        biblioteca — nos dois casos a geometria conferida é a pedida."""
         return session.run(lambda app: h.hole_wizard(
-            app, face_x_mm, face_y_mm, face_z_mm, diameter_mm, depth_mm,
-            hole_type, thread_depth_mm, through_all, position_mm))
+            app, face_x_mm, face_y_mm, face_z_mm, depth_mm, diameter_mm, size, standard,
+            hole_type, thread_depth_mm, through_all, position_mm, add_cosmetic_thread))
 
     @mcp.tool()
     def cosmetic_thread(center_mm: list[float], edge_diameter_mm: float,
