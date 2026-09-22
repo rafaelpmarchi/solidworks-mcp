@@ -10,9 +10,16 @@ Convenções:
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from swmcp.com import units
+from swmcp.com.constants import (
+    SKETCH_MERGE_TOGGLES,
+    SKETCH_SNAP_TOGGLES,
+    SKETCH_TOLERANCE_MM,
+)
 from swmcp.com.invoke import ComCallError, com_call, com_get
 from swmcp.com.session import cast_to, swconst
 from swmcp.domain.corners import EdgeCandidate, select_corner_edges
@@ -132,47 +139,158 @@ def _skm(app: Any) -> Any:
     return skm
 
 
+# ------------------------------------------------- precisão do esboço (snaps)
+
+@contextmanager
+def precise_sketching(app: Any) -> Iterator[None]:
+    """Desenha sem os snaps que arredondam a geometria, e restaura tudo depois.
+
+    Os snaps da UI valem também para a API: com eles ligados o SolidWorks aceita
+    as coordenadas pedidas e grava outras (medido no SW2023 — Ø67,6 vira 70; um
+    canto em y=55 perto de um Ø120 vira 60), sem erro nenhum. Já swSketchInference
+    e swSketchAutomaticRelations ficam LIGADOS de propósito: são eles que unem os
+    endpoints coincidentes de linhas criadas em chamadas separadas — sem isso o
+    contorno fica aberto e a feature falha sem dizer o motivo.
+
+    As preferências são do SolidWorks (persistentes), por isso o estado anterior
+    é restaurado no finally, inclusive quando a modelagem levanta exceção.
+    """
+    sc = swconst()
+    anterior: dict[str, bool] = {}
+    try:
+        for nome in (*SKETCH_SNAP_TOGGLES, *SKETCH_MERGE_TOGGLES):
+            flag = getattr(sc, nome)
+            anterior[nome] = bool(com_call(app, "GetUserPreferenceToggle", flag))
+        for nome in SKETCH_SNAP_TOGGLES:
+            com_call(app, "SetUserPreferenceToggle", getattr(sc, nome), False)
+        for nome in SKETCH_MERGE_TOGGLES:
+            com_call(app, "SetUserPreferenceToggle", getattr(sc, nome), True)
+        yield
+    finally:
+        for nome, valor in anterior.items():
+            try:
+                com_call(app, "SetUserPreferenceToggle", getattr(sc, nome), valor)
+            except ComCallError:  # restaurar é best-effort; o resto tem que continuar
+                log.exception("não consegui restaurar a preferência de esboço %s", nome)
+
+
+def _segment_points_mm(segment: Any) -> list[tuple[float, float]]:
+    """Endpoints de um ISketchSegment de linha, em mm."""
+    line = cast_to(segment, "ISketchLine")
+    saida = []
+    for prop in ("GetStartPoint2", "GetEndPoint2"):
+        ponto = cast_to(com_get(line, prop), "ISketchPoint")
+        saida.append((units.to_mm(com_get(ponto, "X")), units.to_mm(com_get(ponto, "Y"))))
+    return saida
+
+
+def _check_points(op: str, args: tuple, pedidos: list[tuple[float, float]],
+                  obtidos: list[tuple[float, float]]) -> None:
+    """Falha se o SolidWorks gravou coordenadas diferentes das pedidas."""
+    faltando = [p for p in pedidos
+                if not any(abs(p[0] - o[0]) < SKETCH_TOLERANCE_MM
+                           and abs(p[1] - o[1]) < SKETCH_TOLERANCE_MM for o in obtidos)]
+    if faltando:
+        raise ComCallError(
+            op, args, None,
+            f"o SolidWorks gravou coordenadas diferentes das pedidas {faltando} "
+            f"(gravou {obtidos}) — algum snap de esboço continua ligado",
+        )
+
+
 def sketch_line(app: Any, x1: float, y1: float, x2: float, y2: float, centerline: bool = False) -> None:
     skm = _skm(app)
     method = "CreateCenterLine" if centerline else "CreateLine"
-    seg = com_call(skm, method,
-                   units.from_mm(x1), units.from_mm(y1), 0.0,
-                   units.from_mm(x2), units.from_mm(y2), 0.0)
+    with precise_sketching(app):
+        seg = com_call(skm, method,
+                       units.from_mm(x1), units.from_mm(y1), 0.0,
+                       units.from_mm(x2), units.from_mm(y2), 0.0)
     if seg is None:
         raise ComCallError(method, (x1, y1, x2, y2), None, "segmento não criado")
+    _check_points(method, (x1, y1, x2, y2), [(x1, y1), (x2, y2)], _segment_points_mm(seg))
 
 
 def sketch_circle(app: Any, xc: float, yc: float, diameter: float) -> None:
-    seg = com_call(_skm(app), "CreateCircleByRadius",
-                   units.from_mm(xc), units.from_mm(yc), 0.0,
-                   units.from_mm(diameter / 2.0))
+    with precise_sketching(app):
+        seg = com_call(_skm(app), "CreateCircleByRadius",
+                       units.from_mm(xc), units.from_mm(yc), 0.0,
+                       units.from_mm(diameter / 2.0))
     if seg is None:
         raise ComCallError("CreateCircleByRadius", (xc, yc, diameter), None, "círculo não criado")
+    arco = cast_to(seg, "ISketchArc")
+    raio = units.to_mm(com_call(arco, "GetRadius"))
+    if abs(raio * 2.0 - diameter) > SKETCH_TOLERANCE_MM:
+        raise ComCallError("CreateCircleByRadius", (xc, yc, diameter), None,
+                           f"círculo saiu com Ø{raio * 2:.4f} em vez de Ø{diameter} "
+                           "— algum snap de esboço continua ligado")
 
 
 def sketch_rectangle(app: Any, x1: float, y1: float, x2: float, y2: float, center: bool = False) -> None:
     skm = _skm(app)
-    if center:
-        segs = com_call(skm, "CreateCenterRectangle",
-                        units.from_mm(x1), units.from_mm(y1), 0.0,
-                        units.from_mm(x2), units.from_mm(y2), 0.0)
-    else:
-        segs = com_call(skm, "CreateCornerRectangle",
+    metodo = "CreateCenterRectangle" if center else "CreateCornerRectangle"
+    with precise_sketching(app):
+        segs = com_call(skm, metodo,
                         units.from_mm(x1), units.from_mm(y1), 0.0,
                         units.from_mm(x2), units.from_mm(y2), 0.0)
     if not segs:
         raise ComCallError("CreateRectangle", (x1, y1, x2, y2), None, "retângulo não criado")
+    if not center:
+        obtidos = [p for s in segs for p in _segment_points_mm(s)]
+        cantos = [(a, b) for a in (x1, x2) for b in (y1, y2)]
+        _check_points(metodo, (x1, y1, x2, y2), cantos, obtidos)
 
 
 def sketch_arc_center(app: Any, xc: float, yc: float, x1: float, y1: float, x2: float, y2: float,
                       direction: int = 1) -> None:
     """Arco por centro + início + fim. direction: 1 anti-horário, -1 horário."""
-    seg = com_call(_skm(app), "CreateArc",
-                   units.from_mm(xc), units.from_mm(yc), 0.0,
-                   units.from_mm(x1), units.from_mm(y1), 0.0,
-                   units.from_mm(x2), units.from_mm(y2), 0.0, direction)
+    with precise_sketching(app):
+        seg = com_call(_skm(app), "CreateArc",
+                       units.from_mm(xc), units.from_mm(yc), 0.0,
+                       units.from_mm(x1), units.from_mm(y1), 0.0,
+                       units.from_mm(x2), units.from_mm(y2), 0.0, direction)
     if seg is None:
         raise ComCallError("CreateArc", (xc, yc), None, "arco não criado")
+
+
+def sketch_polyline(app: Any, points_mm: list[list[float]], close: bool = False,
+                    close_with_centerline: bool = False) -> dict[str, Any]:
+    """Perfil inteiro numa tacada: linhas ponto a ponto, com os snaps desligados.
+
+    close fecha o contorno com uma linha comum do último ponto ao primeiro;
+    close_with_centerline fecha com linha de CENTRO (é o eixo da revolução).
+    Devolve quantos segmentos saíram e quantos contornos fechados o sketch tem —
+    revolve/extrude exigem 1 contorno fechado.
+    """
+    if len(points_mm) < 2:
+        raise ComCallError("sketch_polyline", (len(points_mm),), None,
+                           "preciso de pelo menos 2 pontos")
+    if close and close_with_centerline:
+        raise ComCallError("sketch_polyline", (), None,
+                           "escolha close OU close_with_centerline, não os dois")
+    pontos = [(float(p[0]), float(p[1])) for p in points_mm]
+    skm = _skm(app)
+    criados = 0
+    with precise_sketching(app):
+        pares = list(zip(pontos, pontos[1:]))
+        if close or close_with_centerline:
+            pares.append((pontos[-1], pontos[0]))
+        for i, (a, b) in enumerate(pares):
+            ultimo = i == len(pares) - 1
+            metodo = "CreateCenterLine" if (ultimo and close_with_centerline) else "CreateLine"
+            seg = com_call(skm, metodo,
+                           units.from_mm(a[0]), units.from_mm(a[1]), 0.0,
+                           units.from_mm(b[0]), units.from_mm(b[1]), 0.0)
+            if seg is None:
+                raise ComCallError(metodo, (a, b), None, f"segmento {i + 1} não criado")
+            _check_points(metodo, (a, b), [a, b], _segment_points_mm(seg))
+            criados += 1
+    sketch = cast_to(com_get(skm, "ActiveSketch"), "ISketch")
+    contornos = len(com_call(sketch, "GetSketchContours") or [])
+    pontos_sketch = len(com_call(sketch, "GetSketchPoints2") or [])
+    if (close or close_with_centerline) and contornos != 1:
+        log.warning("perfil fechado esperava 1 contorno, saíram %d (%d pontos para %d segmentos)",
+                    contornos, pontos_sketch, criados)
+    return {"segments": criados, "closed_contours": contornos, "sketch_points": pontos_sketch}
 
 
 def sketch_polygon(app: Any, xc: float, yc: float, sides: int, diameter: float, inscribed: bool = True) -> None:
@@ -194,29 +312,40 @@ def _feature_name(feat: Any, op: str) -> str:
 
 
 def extrude(app: Any, depth_mm: float, cut: bool = False, flip: bool = False,
-            through_all: bool = False, both_directions: bool = False) -> str:
-    """Extrusão (boss ou corte) do sketch ativo/selecionado."""
+            through_all: bool = False, both_directions: bool = False,
+            reverse_direction: bool = False) -> str:
+    """Extrusão (boss ou corte) do sketch ativo/selecionado.
+
+    São três coisas diferentes, fáceis de confundir:
+    - reverse_direction (Dir da API): para que lado do plano do sketch a
+      extrusão cresce. É isto que se quer para cortar "para o outro lado".
+    - both_directions (Sd=False): cresce para os dois lados do plano.
+    - flip (Flip da API): em corte, inverte QUAL LADO do perfil vira material —
+      passar flip=True por engano tira tudo menos o prisma do perfil.
+    """
     model = _model(_active_doc(app))
     fm = com_get(model, "FeatureManager")
     c = swconst()
     end = c.swEndCondThroughAll if through_all else c.swEndCondBlind
     d = units.from_mm(abs(depth_mm))
+    single_ended = not both_directions
     if cut:
         feat = com_call(
             fm, "FeatureCut4",
-            True, flip, False, end, end, d, d, False, False, False, False,
+            single_ended, flip, reverse_direction, end, end, d, d, False, False, False, False,
             0.0, 0.0, False, False, False, False, False, True, True,
             True, True, False, c.swStartSketchPlane, 0.0, False, False,
         )
     else:
         feat = com_call(
             fm, "FeatureExtrusion3",
-            True, flip, False, end, end, d, d, False, False, False, False,
+            single_ended, flip, reverse_direction, end, end, d, d, False, False, False, False,
             0.0, 0.0, False, False, False, False, True, True, True,
             c.swStartSketchPlane, 0.0, False,
         )
     name = _feature_name(feat, "FeatureCut4" if cut else "FeatureExtrusion3")
-    log.info("extrusão %s criada: %s (%.2fmm)", "corte" if cut else "boss", name, depth_mm)
+    log.info("extrusão %s criada: %s (%.2fmm, %s)", "corte" if cut else "boss", name, depth_mm,
+             "duas direções" if both_directions else ("invertida" if reverse_direction else "normal"))
     return name
 
 

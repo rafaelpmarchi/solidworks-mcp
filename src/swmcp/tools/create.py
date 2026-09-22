@@ -7,6 +7,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from swmcp.com.session import SwSession
+from swmcp.com.wrappers import holes as h
 from swmcp.com.wrappers import modeling as m
 from swmcp.com.wrappers import output as o
 
@@ -73,11 +74,30 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         return {"ok": True}
 
     @mcp.tool()
+    def sketch_polyline(points_mm: list[list[float]], close: bool = False,
+                        close_with_centerline: bool = False) -> dict[str, Any]:
+        """Perfil inteiro no sketch ativo de uma vez: linhas ligando [[x,y], ...]
+        em mm, na ordem dada. close fecha com linha comum; close_with_centerline
+        fecha com linha de CENTRO (o eixo, para revolve). É o jeito certo de
+        desenhar um perfil por API — desenha com os snaps desligados e confere
+        cada ponto gravado contra o pedido, em vez de deixar o SolidWorks
+        arredondar cota em silêncio. Devolve nº de segmentos e de contornos
+        fechados (revolve/extrude precisam de 1)."""
+        return session.run(lambda app: m.sketch_polyline(
+            app, points_mm, close, close_with_centerline))
+
+    @mcp.tool()
     def extrude(depth_mm: float, cut: bool = False, flip: bool = False,
-                through_all: bool = False) -> dict[str, str]:
+                through_all: bool = False, both_directions: bool = False,
+                reverse_direction: bool = False) -> dict[str, str]:
         """Extruda o sketch ativo: boss (cut=False) ou corte (cut=True).
-        through_all corta tudo; flip inverte a direção. Fecha o sketch."""
-        return {"feature": session.run(lambda app: m.extrude(app, depth_mm, cut, flip, through_all))}
+        through_all corta tudo; both_directions cresce para os dois lados do
+        plano; reverse_direction inverte PARA QUE LADO cresce — é este que se
+        usa para cortar para o outro lado. flip é outra coisa: inverte qual lado
+        do perfil vira material (num corte, flip=True tira tudo MENOS o perfil).
+        Fecha o sketch."""
+        return {"feature": session.run(lambda app: m.extrude(
+            app, depth_mm, cut, flip, through_all, both_directions, reverse_direction))}
 
     @mcp.tool()
     def revolve(angle_deg: float = 360.0, cut: bool = False) -> dict[str, str]:
@@ -136,6 +156,56 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         append=True acumula seleção (necessário para mates e filetes múltiplos)."""
         return {"selected": session.run(
             lambda app: m.select_entity(app, name, entity_type, x_mm, y_mm, z_mm, append, mark))}
+
+    @mcp.tool()
+    def select_circular_edge(center_mm: list[float], diameter_mm: float, append: bool = False,
+                             tolerance_mm: float = 0.01) -> dict[str, Any]:
+        """Seleciona a aresta circular de centro [x,y,z] e diâmetro dados (mm).
+        Casa pela geometria em vez de depender de acertar um ponto em cima da
+        aresta como o select_entity(EDGE) — use list_circular_edges para ver as
+        que existem. append=True acumula (para filetar várias de uma vez)."""
+        return session.run(lambda app: h.select_circular_edge(
+            app, center_mm, diameter_mm, append, tolerance_mm))
+
+    @mcp.tool()
+    def select_face_at(x_mm: float, y_mm: float, z_mm: float, append: bool = False,
+                       tolerance_mm: float = 0.1) -> dict[str, Any]:
+        """Seleciona a face que passa pelo ponto (mm), casando pela geometria.
+        Use quando select_entity(FACE) devolver 'nada selecionado' mesmo com o
+        ponto em cima da face: o SelectByID2 por coordenadas depende do estado
+        da janela ativa, este não."""
+        return session.run(lambda app: h.select_face_at(app, x_mm, y_mm, z_mm, append, tolerance_mm))
+
+    @mcp.tool()
+    def hole_wizard(face_x_mm: float, face_y_mm: float, face_z_mm: float,
+                    diameter_mm: float, depth_mm: float, hole_type: str = "simple",
+                    thread_depth_mm: float = 0, through_all: bool = False,
+                    position_mm: list[float] | None = None) -> dict[str, Any]:
+        """Furo pelo ASSISTENTE DE FURAÇÃO na face apontada pelas coordenadas (mm).
+        hole_type: simple, tap (macho reto), counterbore, countersink, taper_tap.
+        position_mm é o centro do furo nas coordenadas do sketch da face — o
+        padrão [0,0] é a origem (no eixo, numa face de extremidade).
+        O tamanho vem de diameter_mm/depth_mm e NÃO de uma norma: sem o Toolbox
+        instalado a base de tamanhos não responde e pedir 'M20 ISO' gera um furo
+        em polegada com o nome certo. Para o macho, diameter_mm é o Ø da broca
+        (M20x2,5 → 17,5) e thread_depth_mm o comprimento roscado; a rosca em si
+        se acrescenta com cosmetic_thread."""
+        return session.run(lambda app: h.hole_wizard(
+            app, face_x_mm, face_y_mm, face_z_mm, diameter_mm, depth_mm,
+            hole_type, thread_depth_mm, through_all, position_mm))
+
+    @mcp.tool()
+    def cosmetic_thread(center_mm: list[float], edge_diameter_mm: float,
+                        thread_diameter_mm: float, length_mm: float,
+                        callout: str = "", through_all: bool = False) -> dict[str, Any]:
+        """Representação de rosca a partir de uma aresta circular (mm).
+        center_mm/edge_diameter_mm identificam a aresta onde a rosca começa (a
+        boca do furo, ou o fim do chanfro numa ponta roscada externa);
+        thread_diameter_mm é o Ø nominal e callout o texto da chamada
+        ('M20x2,5'). Vale para rosca interna e externa."""
+        return session.run(lambda app: h.cosmetic_thread(
+            app, center_mm, edge_diameter_mm, thread_diameter_mm, length_mm,
+            callout, through_all))
 
     @mcp.tool()
     def clear_selection() -> dict[str, bool]:

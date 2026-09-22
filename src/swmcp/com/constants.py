@@ -87,3 +87,52 @@ def revision_to_year(revision: str) -> int | None:
     except (ValueError, AttributeError, IndexError):
         return None
     return _REVISION_BASE_YEAR + (major - _REVISION_BASE_MAJOR)
+
+
+# ------------------------------------------------------------------ esboço
+
+# swUserPreferenceToggle_e — snaps que ARREDONDAM a geometria criada por API.
+# Medido no SW2023: com eles ligados, CreateLine/CreateCornerRectangle aceitam
+# as coordenadas e devolvem outras (Ø67,6 → 70; y=55 encostado num Ø120 → 60),
+# sem erro nenhum. Desligados durante o desenho, a geometria sai exata.
+SKETCH_SNAP_TOGGLES = (
+    "swSketchSnapsNearest",
+    "swSketchSnapsPoints",
+    "swSketchSnapsCenterPoints",
+    "swSketchSnapsQuadrantPoints",
+    "swSketchSnapsMidPoints",
+    "swSketchSnapsIntersections",
+    "swSketchSnapsHVPoints",
+    "swSketchSnapsHVLines",
+    "swSketchSnapsLength",
+    "swSketchSnapsGrid",
+    "swSketchSnapsTangent",
+    "swSketchSnapsPerpendicular",
+    "swSketchSnapsParallel",
+    "swSketchInferFromModel",
+)
+
+# Estes precisam ficar LIGADOS: são eles que unem os endpoints coincidentes de
+# linhas criadas em chamadas separadas. Sem eles cada linha fica solta (N
+# segmentos = 2N pontos, contorno aberto) e FeatureRevolve2/FeatureCut4
+# devolvem None sem explicação.
+SKETCH_MERGE_TOGGLES = (
+    "swSketchInference",
+    "swSketchAutomaticRelations",
+)
+
+# Tolerância de conferência da geometria de esboço (mm). Abaixo disso é ruído
+# numérico da conversão m↔mm; acima, algum snap mexeu no que foi pedido.
+SKETCH_TOLERANCE_MM = 1e-4
+
+# swAdvWzdHoleTypes_e — tipos do assistente de furação no modo LEGADO, o único
+# que obedece aos parâmetros passados quando o Toolbox não está instalado (aí a
+# base de tamanhos não responde e as normas ISO/DIN/ANSI geram um furo em
+# polegada, com o NOME certo e a geometria errada).
+ADV_WIZARD_HOLE_TYPES = {
+    "simple": "swAdvWzdStraight",
+    "tap": "swAdvWzdStraightTap",
+    "counterbore": "swAdvWzdCounterBore",
+    "countersink": "swAdvWzdCounterSink",
+    "taper_tap": "swAdvWzdTaperTap",
+}

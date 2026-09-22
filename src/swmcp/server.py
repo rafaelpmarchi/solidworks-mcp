@@ -17,6 +17,24 @@ de modelagem: new_document → create_sketch(plano) → sketch_* → extrude/rev
 estar instalado nesta máquina; se não houver instância aberta, uma nova é
 iniciada visível ao usuário.
 
+Geometria por API sai EXATA, mas não confie na tela para saber isso: os snaps
+de esboço do SolidWorks valem também para a API e arredondam o que se pede sem
+avisar. As tools sketch_* desligam esses snaps e conferem cada coordenada
+gravada; sketch_polyline desenha um perfil inteiro assim de uma vez. Depois de
+cada feature, measure_bodies dá o volume medido para comparar com a conta feita
+à mão — é o que pega cota errada, corte que pegou material demais e furo com o
+tamanho trocado. Em extrude, reverse_direction muda o lado para onde a extrusão
+cresce e both_directions cresce para os dois; flip é diferente — inverte qual
+lado do perfil vira material e num corte apaga quase tudo.
+
+Furo: hole_wizard usa o assistente de furação (simple/tap/counterbore/
+countersink/taper_tap) com o tamanho vindo dos parâmetros, porque a base de
+tamanhos do Toolbox não responde nesta instalação — pedir norma ISO devolve um
+furo em polegada com o nome certo. A rosca entra depois como cosmetic_thread
+(interna ou externa), sobre a aresta achada por list_circular_edges +
+select_circular_edge, que casam a aresta pela geometria em vez de exigir um
+clique certeiro.
+
 Engenharia reversa (tools mesh_*): trabalham numa malha de scanner 3D
 (STL/OBJ/PLY em mm) processada por um motor em subprocesso — nada disso toca
 o SolidWorks até mesh_section_to_sketch/mesh_primitive_to_sw. Fluxo:
