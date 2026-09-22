@@ -284,6 +284,8 @@ def sketch_polyline(app: Any, points_mm: list[list[float]], close: bool = False,
                 raise ComCallError(metodo, (a, b), None, f"segmento {i + 1} não criado")
             _check_points(metodo, (a, b), [a, b], _segment_points_mm(seg))
             criados += 1
+    if close or close_with_centerline:
+        _merge_coincident_points(app)
     sketch = cast_to(com_get(skm, "ActiveSketch"), "ISketch")
     contornos = len(com_call(sketch, "GetSketchContours") or [])
     pontos_sketch = len(com_call(sketch, "GetSketchPoints2") or [])
@@ -291,6 +293,44 @@ def sketch_polyline(app: Any, points_mm: list[list[float]], close: bool = False,
         log.warning("perfil fechado esperava 1 contorno, saíram %d (%d pontos para %d segmentos)",
                     contornos, pontos_sketch, criados)
     return {"segments": criados, "closed_contours": contornos, "sketch_points": pontos_sketch}
+
+
+def _merge_coincident_points(app: Any, limite: int = 200) -> int:
+    """Une os endpoints que estão na mesma coordenada mas são pontos diferentes.
+
+    A linha que FECHA um contorno volta a um ponto criado várias chamadas antes,
+    e o SolidWorks não o mescla: o esboço fica com um vértice duplicado que
+    GetSketchContours ainda conta como fechado, mas revolve/extrude rejeitam sem
+    dizer por quê. Cada coincidência recria as entidades, então a lista é refeita
+    a cada volta.
+    """
+    model = _model(_active_doc(app))
+    unidos = 0
+    for _ in range(limite):
+        skm = com_get(model, "SketchManager")
+        ativo = com_get(skm, "ActiveSketch")
+        if ativo is None:
+            break
+        sketch = cast_to(ativo, "ISketch")
+        grupos: dict[tuple[float, float], list[Any]] = {}
+        for raw in com_call(sketch, "GetSketchSegments") or []:
+            linha = cast_to(raw, "ISketchLine")
+            for prop in ("GetStartPoint2", "GetEndPoint2"):
+                ponto = cast_to(com_get(linha, prop), "ISketchPoint")
+                chave = (round(units.to_mm(com_get(ponto, "X")), 4),
+                         round(units.to_mm(com_get(ponto, "Y")), 4))
+                grupos.setdefault(chave, []).append(ponto)
+        duplicado = next(((k, v) for k, v in grupos.items() if len(v) > 1), None)
+        if duplicado is None:
+            break
+        _, pontos = duplicado
+        com_call(model, "ClearSelection2", True)
+        com_call(pontos[0], "Select4", False, None)
+        com_call(pontos[1], "Select4", True, None)
+        com_call(model, "SketchAddConstraints", "sgCOINCIDENT")
+        unidos += 1
+    com_call(model, "ClearSelection2", True)
+    return unidos
 
 
 def sketch_polygon(app: Any, xc: float, yc: float, sides: int, diameter: float, inscribed: bool = True) -> None:

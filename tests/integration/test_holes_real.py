@@ -10,9 +10,11 @@ import pytest
 from swmcp.com.invoke import ComCallError, com_call, com_get
 from swmcp.com.session import SwSession
 from swmcp.com.wrappers import hole_library as hl
+from swmcp.com.wrappers import dimensioning as dm
 from swmcp.com.wrappers import holes as h
 from swmcp.com.wrappers import modeling as m
 from swmcp.com.wrappers import output as o
+from swmcp.com.wrappers import turning as t
 
 pytestmark = pytest.mark.integration
 
@@ -121,3 +123,62 @@ def test_tamanho_fora_da_biblioteca_diz_onde_procurar(session, eixo):
     with pytest.raises(ComCallError, match="não está na biblioteca"):
         session.run(lambda app: h.hole_wizard(app, 0, 10, 0, 25, size="M13x1.9",
                                               standard="Ansi Metric", hole_type="tap"))
+
+
+def test_canal_de_alivio_sai_com_rampas_e_raios(session, eixo):
+    """O canal do desenho tem rampa em ângulo e raio no fundo, não canto vivo."""
+    antes = session.run(lambda app: h.measure_bodies(app))[0]["volume_mm3"]
+    r = session.run(lambda app: t.groove_relief(app, 70.0, 85.0, 30.0,
+                                                ramp_angle_deg=60.0, corner_radius_mm=2.0))
+    assert r["outer_diameter_start_mm"] == pytest.approx(40.0)
+    assert r["fillet"], "os cantos do fundo ficaram vivos"
+
+    depois = session.run(lambda app: h.measure_bodies(app))[0]["volume_mm3"]
+    assert depois < antes, "o canal não removeu material"
+
+    fundo = [e for e in session.run(lambda app: h.list_circular_edges(app, 29, 31))]
+    assert fundo, "não há aresta no diâmetro do fundo do canal"
+
+
+def test_canal_estreito_demais_avisa_em_vez_de_sair_torto(session, eixo):
+    with pytest.raises(ComCallError, match="se cruzam antes do fundo"):
+        session.run(lambda app: t.groove_relief(app, 70.0, 72.0, 30.0, ramp_angle_deg=60.0))
+
+
+def test_rebaixo_plano_varre_o_cone_vizinho(session, eixo_com_colar):
+    """Cortar só a largura do colar deixa dente no cone ao lado; auto_extend não."""
+    r = session.run(lambda app: t.flats_across(app, 50.0, 40.0, 52.0))
+    assert r["extended"], "o trecho devia crescer sozinho para varrer o cone"
+    assert r["span_mm"][1] > 52.0, "parou na face do colar e deixou o dente do cone"
+    assert not r["warnings"], f"sobrou material acima do plano: {r['warnings']}"
+
+    # nada do corpo pode passar do entre-faces onde o rebaixo foi feito
+    medido = session.run(lambda app: h.measure_bodies(app))[0]
+    assert medido["box_mm"][1] == pytest.approx(-25.0, abs=0.01)
+    assert medido["box_mm"][4] == pytest.approx(25.0, abs=0.01)
+
+
+def test_rebaixo_avisa_quando_o_material_nao_acaba(session, eixo):
+    """Num eixo reto, pedir entre-faces menor que o corpo varreria a peça toda."""
+    r = session.run(lambda app: t.flats_across(app, 30.0, 43.0, 55.0))
+    assert r["warnings"], "devia avisar que o material acima do plano não acaba"
+
+
+@pytest.fixture
+def eixo_com_colar(session):
+    """Eixo Ø40 com colar Ø60 (x 40..52) e cone de 45° descendo até o corpo."""
+    session.run(lambda app: o.new_document(app, "part"))
+    title = session.run(lambda app: com_call(com_get(app, "ActiveDoc"), "GetTitle"))
+    session.run(lambda app: m.insert_sketch(app, "Plano frontal"))
+    perfil = [[0, 0], [0, 20], [40, 20], [40, 30], [52, 30], [62, 20], [100, 20], [100, 0]]
+    session.run(lambda app: m.sketch_polyline(app, perfil, close_with_centerline=True))
+    session.run(lambda app: m.revolve(app, 360.0))
+    yield perfil
+    session.run(lambda app: com_call(app, "CloseDoc", title))
+
+
+def test_perfil_fica_totalmente_definido(session, eixo):
+    r = session.run(lambda app: dm.fully_dimension_profile(app, "Esboço1", reset=True))
+    assert r["fully_defined"], f"esboço continuou sub-definido (status {r['status']})"
+    assert any("metro" in d["kind"] for d in r["dimensions"]), "nenhuma cota de diâmetro"
+    assert any("comprimento" in d["kind"] for d in r["dimensions"]), "nenhuma cota axial"

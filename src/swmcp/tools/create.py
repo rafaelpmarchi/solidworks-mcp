@@ -7,9 +7,11 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from swmcp.com.session import SwSession
+from swmcp.com.wrappers import dimensioning as dm
 from swmcp.com.wrappers import holes as h
 from swmcp.com.wrappers import modeling as m
 from swmcp.com.wrappers import output as o
+from swmcp.com.wrappers import turning as t
 
 
 def register(mcp: MCPServer, session: SwSession) -> None:
@@ -166,6 +168,48 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         que existem. append=True acumula (para filetar várias de uma vez)."""
         return session.run(lambda app: h.select_circular_edge(
             app, center_mm, diameter_mm, append, tolerance_mm))
+
+    @mcp.tool()
+    def groove_relief(z_start_mm: float, z_end_mm: float, groove_diameter_mm: float,
+                      ramp_angle_deg: float = 60.0, corner_radius_mm: float = 0.0,
+                      outer_diameter_start_mm: float = 0, outer_diameter_end_mm: float = 0
+                      ) -> dict[str, Any]:
+        """Canal de alívio / saída de rosca por corte de revolução, no eixo X.
+        z_start/z_end são onde o canal encontra a superfície externa (é assim que
+        o desenho cota a largura), ramp_angle_deg é o ângulo das rampas COM O
+        EIXO e corner_radius_mm arredonda os dois cantos do fundo — que é o que
+        o desenho pede e um rasgo de cantos vivos não tem. Os diâmetros externos
+        de cada borda são medidos do corpo quando não informados."""
+        return session.run(lambda app: t.groove_relief(
+            app, z_start_mm, z_end_mm, groove_diameter_mm, ramp_angle_deg,
+            corner_radius_mm, outer_diameter_start_mm, outer_diameter_end_mm))
+
+    @mcp.tool()
+    def flats_across(across_flats_mm: float, z_start_mm: float, z_end_mm: float,
+                     auto_extend: bool = True) -> dict[str, Any]:
+        """Rebaixo plano dos dois lados (entre-faces) num trecho do eixo X.
+        across_flats_mm é a medida ENTRE AS FACES (o '110-0,35' do desenho).
+        Com auto_extend o trecho cresce sozinho enquanto houver material acima
+        do plano — é o que evita deixar um dente no cone ou no raio vizinho
+        quando se corta só a largura do colar. Confere no fim que não sobrou
+        nada acima do plano e devolve o trecho que realmente cortou."""
+        return session.run(lambda app: t.flats_across(
+            app, across_flats_mm, z_start_mm, z_end_mm, auto_extend))
+
+    @mcp.tool()
+    def fully_dimension_profile(sketch_name: str = "", axial_baseline_mm: float = 0,
+                                reset: bool = False) -> dict[str, Any]:
+        """Cota um perfil de revolução até ele ficar TOTALMENTE DEFINIDO (preto).
+        Esboço feito por API nasce sub-definido (azul): a geometria está certa
+        mas nada segura as cotas e não há o que parametrizar. Põe relação
+        horizontal/vertical em cada linha, prende o perfil na origem, faz os
+        degraus de mesmo diâmetro colineares, cota o DIÂMETRO de cada degrau e a
+        posição axial de cada um a partir de axial_baseline_mm. Cada cota é
+        conferida e a que sobredefiniria é desfeita; reset=True apaga cotas e
+        relações existentes antes, tornando a cotagem repetível. Devolve as
+        cotas criadas e se o esboço ficou totalmente definido."""
+        return session.run(lambda app: dm.fully_dimension_profile(
+            app, sketch_name, axial_baseline_mm, reset))
 
     @mcp.tool()
     def select_face_at(x_mm: float, y_mm: float, z_mm: float, append: bool = False,

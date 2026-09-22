@@ -20,7 +20,16 @@ iniciada visível ao usuário.
 Geometria por API sai EXATA, mas não confie na tela para saber isso: os snaps
 de esboço do SolidWorks valem também para a API e arredondam o que se pede sem
 avisar. As tools sketch_* desligam esses snaps e conferem cada coordenada
-gravada; sketch_polyline desenha um perfil inteiro assim de uma vez. Depois de
+gravada; sketch_polyline desenha um perfil inteiro assim de uma vez e une o
+vértice que fecha o contorno (sem isso o esboço parece fechado e a feature é
+recusada sem explicação). Esboço feito por API nasce sub-definido: quando a
+peça tiver de ficar parametrizada, fully_dimension_profile cota o perfil de
+revolução até ele ficar preto, conferindo cota a cota.
+
+Peça torneada: groove_relief faz o canal de alívio/saída de rosca com rampas em
+ângulo e raio no fundo, e flats_across faz o rebaixo plano entre-faces varrendo
+sozinho todo o trecho com diâmetro maior que a medida — cortar só a largura do
+colar deixa um dente no cone vizinho. Depois de
 cada feature, measure_bodies dá o volume medido para comparar com a conta feita
 à mão — é o que pega cota errada, corte que pegou material demais e furo com o
 tamanho trocado. Em extrude, reverse_direction muda o lado para onde a extrusão
