@@ -208,6 +208,25 @@ def recognize_loop(entities: list[dict], closed: bool,
     return None
 
 
+
+def _polylines(sec, min_len_mm: float) -> list:
+    """Todas as polilinhas da seção: os ciclos fechados (`discrete`) MAIS as
+    curvas abertas, que o trimesh deixa fora de `discrete` — numa malha de
+    scan (nunca estanque) a seção que passa pelo eixo de uma peça de
+    revolução é toda de curvas abertas e sumia inteira. Curvas abertas mais
+    curtas que min_len_mm são cacos (triângulo degenerado, ruído) e caem."""
+    used = {i for path in sec.paths for i in path}
+    out = [np.asarray(d) for d in sec.discrete]
+    for i, ent in enumerate(sec.entities):
+        if i in used:
+            continue
+        pts = np.asarray(ent.discrete(sec.vertices))
+        if len(pts) < 2:
+            continue
+        if np.linalg.norm(np.diff(pts, axis=0), axis=1).sum() >= min_len_mm:
+            out.append(pts)
+    return out
+
 def section(mesh: trimesh.Trimesh, axis: str | list, positions: list[float],
             tol_mm: float = 0.1, angle_break_deg: float = 25.0) -> list[dict]:
     """Seções perpendiculares a `axis` nas cotas `positions` (mm).
@@ -231,7 +250,7 @@ def section(mesh: trimesh.Trimesh, axis: str | list, positions: list[float],
         u, v = _plane_frame(normal, origin)
         entry["plane"]["u"] = u.tolist()
         entry["plane"]["v"] = v.tolist()
-        for line in sec.discrete:  # cada loop/curva como sequência de pontos 3D
+        for line in _polylines(sec, 10.0 * tol_mm):  # cada loop/curva como sequência de pontos 3D
             pts2 = _to_2d(np.asarray(line), origin, u, v)
             closed = bool(np.linalg.norm(pts2[0] - pts2[-1]) < 1e-6)
             entities = _merge_collinear(
@@ -271,7 +290,7 @@ def radial_sections(mesh: trimesh.Trimesh, axis_point: list, axis_dir: list,
         u, v = _plane_frame(normal, p0)
         entry["plane"]["u"] = u.tolist()
         entry["plane"]["v"] = v.tolist()
-        for line in sec.discrete:
+        for line in _polylines(sec, 10.0 * tol_mm):
             pts2 = _to_2d(np.asarray(line), p0, u, v)
             closed = bool(np.linalg.norm(pts2[0] - pts2[-1]) < 1e-6)
             entities = _merge_collinear(

@@ -97,7 +97,18 @@ bridge/merge de arestas nem continuidade G2 multi-patch.
 2. `mesh_decimate(200000)` — se o scan vier pesado.
 3. `mesh_align("pca")` ou `mesh_align("plane_to_xy", region=...)` — assenta a
    face usinada de referência em Z=0. **Tudo que vem depois sai neste sistema
-   de coordenadas.**
+   de coordenadas.** Se já existe um CAD da peça (conferência, retrabalho,
+   variante), use `mesh_align("to_cad")`: exporta um STL temporário do
+   documento aberto e registra o scan nele (PCA dos dois + 48 candidatos de
+   rotação + ICP ponto-a-plano, ~15 s para 300 k faces). A malha passa a
+   viver no sistema do desenho e `mesh_deviation_map` usa esse STL como
+   referência padrão. Confira `registro.inlier_fraction` (fração do scan a
+   menos de `inlier_mm` do CAD): baixo demais = peça diferente do modelo ou
+   mínimo local — nesse caso passe `region` com só as faces usinadas.
+   `mesh_align("to_reference", reference_stl=...)` faz o mesmo contra
+   qualquer STL. A seção que passa pelo eixo de uma peça de revolução sai
+   como curvas ABERTAS (scan nunca é estanque) — `mesh_section_to_sketch`
+   desenha as abertas também.
 4. `mesh_segment()` — separa regiões lisas (usinadas) da superfície bruta de
    fundição pela variação das normais. Cada região ganha um label.
 5. `mesh_fit_primitive(kind="auto", region={"labels": {"value": N}})` —
@@ -116,7 +127,8 @@ bridge/merge de arestas nem continuidade G2 multi-patch.
    (`export_document`).
 8. `mesh_deviation_map(reference_stl=...)` — PNG com 4 vistas: vermelho =
    scan acima do CAD, azul = abaixo, **cinza = sem dado** (lacuna de scan não
-   é interpolada — buraco de scan é informação, não zero).
+   é interpolada — buraco de scan é informação, não zero). O mapa NÃO alinha:
+   scan e STL precisam estar no mesmo sistema — é o que `to_cad` garante.
 
 ## Regiões (sem picking gráfico)
 

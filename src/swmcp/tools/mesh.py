@@ -23,6 +23,7 @@ from mcp.server.mcpserver import MCPServer
 
 from swmcp.com.session import SwSession
 from swmcp.com.wrappers import modeling as m
+from swmcp.com.wrappers import output as o
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ENGINE_DIR = _REPO_ROOT / "engine"
@@ -259,13 +260,40 @@ def op_export(out_path: str) -> dict[str, Any]:
     return _engine("export", {"mesh": _active_mesh(), "out": out_path})
 
 
-def op_align(mode: str = "pca", region: dict | None = None) -> dict[str, Any]:
+def op_align(mode: str = "pca", region: dict | None = None,
+             reference: str | None = None,
+             inlier_mm: float = 0.5) -> dict[str, Any]:
     out = _work("aligned.stl")
-    r = _engine("align", {"mesh": _active_mesh(), "out": out,
-                          "mode": mode, "region": _resolve_region(region)})
+    args: dict[str, Any] = {"mesh": _active_mesh(), "out": out,
+                            "mode": mode, "region": _resolve_region(region)}
+    if mode == "to_reference":
+        if not reference:
+            raise RuntimeError("mode=to_reference exige reference_stl "
+                               "(ou use mode=to_cad para exportar o documento ativo)")
+        args["reference"] = reference
+        args["inlier_mm"] = inlier_mm
+    r = _engine("align", args)
     state = _load_state()
     state.update({"mesh": out, "labels": None, "regioes": None})
+    if mode == "to_reference":
+        state["cad_stl"] = reference
+        ext = r.get("referencia_extents_mm") or []
+        if ext and max(ext) < 0.1 * max(r.get("extents_mm", [1])):
+            r["aviso"] = ("a referência é ~25x menor que o scan: o STL do CAD "
+                          "provavelmente saiu em polegadas — confira as "
+                          "unidades de exportação STL do SolidWorks")
     _save_state(state)
+    return r
+
+
+def op_align_to_cad(session: SwSession, region: dict | None = None,
+                    inlier_mm: float = 0.5) -> dict[str, Any]:
+    """Exporta o documento ativo do SolidWorks em STL (temporário) e registra
+    o scan nele."""
+    stl = _work("cad.stl")
+    exp = session.run(lambda app: o.save_as(app, stl, True))
+    r = op_align("to_reference", region, stl, inlier_mm)
+    r["cad_stl"] = exp["path"]
     return r
 
 
@@ -391,7 +419,11 @@ def op_deviation(reference_stl: str | None = None, primitive: dict | None = None
                  scale_mm: float | None = None,
                  pass_fail_tol_mm: float | None = None) -> dict[str, Any]:
     if not reference_stl and not primitive:
-        raise RuntimeError("passe reference_stl (malha) ou primitive (fit)")
+        reference_stl = _load_state().get("cad_stl")
+        if not reference_stl:
+            raise RuntimeError("passe reference_stl (malha) ou primitive (fit) "
+                               "— ou alinhe antes com mesh_align(mode='to_cad'), "
+                               "que deixa o STL do CAD como referência padrão")
     png = _work("deviation.png")
     args: dict[str, Any] = {"mesh": _active_mesh(), "png": png,
                             "max_dist_mm": max_dist_mm}
@@ -463,17 +495,22 @@ def op_section_to_sketch(session: SwSession, axis: str, position_mm: float,
 
 
 def op_primitive_to_sw(session: SwSession, primitive: dict) -> dict[str, Any]:
-    import numpy as np
+    # sem numpy de propósito: o venv do servidor MCP não tem numpy (só o do
+    # motor tem) — e aqui é só produto escalar.
+    import math
     kind = primitive.get("kind")
-    axes = {"x": (np.array([1.0, 0, 0]), "Plano direito"),
-            "y": (np.array([0, 1.0, 0]), "Plano frontal"),
-            "z": (np.array([0, 0, 1.0]), "Plano superior")}
+    axes = {"x": ((1.0, 0.0, 0.0), "Plano direito"),
+            "y": ((0.0, 1.0, 0.0), "Plano frontal"),
+            "z": ((0.0, 0.0, 1.0), "Plano superior")}
+
+    def dot(a, b):
+        return sum(float(x) * float(y) for x, y in zip(a, b))
 
     def closest_axis(v):
-        v = np.asarray(v, float)
-        v = v / np.linalg.norm(v)
+        n = math.sqrt(dot(v, v))
+        v = [float(x) / n for x in v]
         for name, (ax, plane) in axes.items():
-            if abs(float(v @ ax)) > 0.9986:  # ~3 graus
+            if abs(dot(v, ax)) > 0.9986:  # ~3 graus
                 return name, ax, plane
         return None
 
@@ -483,7 +520,7 @@ def op_primitive_to_sw(session: SwSession, primitive: dict) -> dict[str, Any]:
             return {"aviso": "normal oblíqua aos eixos — use run_sw_script "
                              "para plano por 3 pontos", "primitive": primitive}
         name, ax, plane = hit
-        offset = float(np.asarray(primitive["point"], float) @ ax)
+        offset = dot(primitive["point"], ax)
         feat = session.run(lambda app: m.reference_plane_offset(
             app, plane, abs(offset), flip=offset < 0))
         return {"feature": feat, "base": plane, "offset_mm": round(offset, 4)}
@@ -494,10 +531,10 @@ def op_primitive_to_sw(session: SwSession, primitive: dict) -> dict[str, Any]:
             return {"aviso": "eixo oblíquo — use run_sw_script",
                     "primitive": primitive}
         name, ax, plane = hit
-        p = np.asarray(primitive["point"], float)
+        p = [float(x) for x in primitive["point"]]
         height = float(primitive.get("height", 0.0))
-        base = p - ax * height / 2.0
-        offset = float(base @ ax)
+        base = [pi - ai * height / 2.0 for pi, ai in zip(p, ax)]
+        offset = dot(base, ax)
         uv_idx = {"x": (1, 2), "y": (0, 2), "z": (0, 1)}[name]
         cx, cy = float(p[uv_idx[0]]), float(p[uv_idx[1]])
         dia = 2.0 * float(primitive["radius"])
@@ -546,15 +583,29 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         return op_decimate(target_faces)
 
     @mcp.tool()
-    def mesh_align(mode: str = "pca", region: dict | None = None) -> dict[str, Any]:
-        """Alinha a malha ativa ao sistema de coordenadas de trabalho e a torna
-        a ativa. mode: 'pca' (eixos principais -> XYZ, centroide na origem),
-        'bbox' (caixa mínima orientada, canto em 0,0,0) ou 'plane_to_xy'
-        (ajusta um plano na 'region' e o leva para Z=0 com normal +Z — ideal
-        para assentar a face usinada de referência). region (opcional):
-        {"box": {"min":[x,y,z],"max":[x,y,z]}} | {"axis_range": {"axis":"z",
-        "min":a,"max":b}} | {"seed": {"point":[x,y,z],"radius":r}}."""
-        return op_align(mode, region)
+    def mesh_align(mode: str = "pca", region: dict | None = None,
+                   reference_stl: str | None = None,
+                   inlier_mm: float = 0.5) -> dict[str, Any]:
+        """Alinha a malha ativa e a torna a ativa. mode:
+        'to_cad' — registra o scan NO DOCUMENTO ABERTO do SolidWorks (exporta
+          um STL temporário do modelo e faz best-fit rígido PCA + ICP): a
+          malha passa a viver no sistema de coordenadas do desenho, e daí
+          seções, primitivas e mesh_deviation_map (que passa a usar esse STL
+          como referência padrão) saem direto sobre o CAD. Devolve 'registro'
+          com rms/p95/inlier_fraction (fração do scan a menos de inlier_mm
+          do CAD) antes e depois — inlier baixo = peça diferente do modelo ou
+          registro preso num mínimo local; 'region' restringe os pontos do
+          scan usados (ex.: só as faces usinadas, {"labels": {...}}).
+        'to_reference' — o mesmo contra um STL dado em reference_stl.
+        'pca' (eixos principais -> XYZ, centroide na origem), 'bbox' (caixa
+        mínima orientada, canto em 0,0,0) ou 'plane_to_xy' (ajusta um plano na
+        'region' e o leva para Z=0 com normal +Z — assenta a face usinada de
+        referência). region: {"box": {"min":[x,y,z],"max":[x,y,z]}} |
+        {"axis_range": {"axis":"z","min":a,"max":b}} | {"seed": {"point":
+        [x,y,z],"radius":r}} | {"labels": {"value": N}}."""
+        if mode == "to_cad":
+            return op_align_to_cad(session, region, inlier_mm)
+        return op_align(mode, region, reference_stl, inlier_mm)
 
     @mcp.tool()
     def mesh_segment(radius_mm: float = 3.0, smooth_threshold_deg: float = 8.0,

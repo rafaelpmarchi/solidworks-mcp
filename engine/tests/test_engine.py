@@ -102,6 +102,24 @@ def test_align_pca_recenters(cylinder_mesh):
     assert abs(out.extents[0] - 80.0) < 1.0
 
 
+def test_align_to_reference_recovers_pose(cast_block):
+    """Scan deslocado/girado volta para o CAD; um ressalto num canto tira a
+    simetria do bloco e trava o giro em torno de Z."""
+    boss = trimesh.creation.box(extents=[10.0, 10.0, 8.0])
+    boss.apply_translation([22.0, 12.0, 14.0])
+    cad = trimesh.util.concatenate([cast_block, boss.subdivide().subdivide()])
+    moved = cad.copy()
+    moved.apply_transform(trimesh.transformations.euler_matrix(0.5, -0.3, 2.4))
+    moved.apply_translation([80.0, -40.0, 25.0])
+    matrix, stats = align.align_to_reference(moved, cad, samples=8000,
+                                             seed_rotations=8)
+    back = align.apply_alignment(moved, matrix)
+    err = np.linalg.norm(back.vertices - cad.vertices, axis=1)
+    assert np.median(err) < 0.3, np.median(err)
+    assert stats["rms_mm"] < stats["antes"]["rms_mm"]
+    assert stats["inlier_fraction"] > 0.9
+
+
 def test_align_plane_to_xy(cast_block):
     moved = cast_block.copy()
     moved.apply_transform(trimesh.transformations.euler_matrix(0.3, 0.1, 0.0))

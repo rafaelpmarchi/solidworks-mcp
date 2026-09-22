@@ -10,7 +10,9 @@ Comandos:
   smooth    {"mesh": path, "out": path, "iterations"?: int}
   flip      {"mesh": path, "out": path}
   export    {"mesh": path, "out": path}   (formato pela extensão)
-  align     {"mesh": path, "out": path, "mode": "pca|bbox|plane_to_xy|matrix",
+  align     {"mesh": path, "out": path, "mode": "pca|bbox|plane_to_xy|matrix|to_reference",
+             "reference"?: path (STL do CAD, mode=to_reference), "samples"?,
+             "seed_rotations"?, "inlier_mm"?, "matrix"?: 4x4 (chute inicial),
              "region"?: {...}, "matrix"?: [16 floats]}
   segment   {"mesh": path, "labels_out": path(.npy), "radius_mm"?,
              "smooth_threshold_deg"?, "min_region_vertices"?}
@@ -79,6 +81,21 @@ def _run(command: str, a: dict) -> dict:
 
     if command == "align":
         mesh = mesh_io.load_mesh(a["mesh"])
+        if a["mode"] == "to_reference":
+            if not a.get("reference"):
+                raise ValueError("mode=to_reference exige 'reference' (STL do CAD)")
+            ref = mesh_io.load_mesh(a["reference"])
+            matrix, stats = align_mod.align_to_reference(
+                mesh, ref, a.get("region"), int(a.get("samples", 30000)),
+                int(a.get("seed_rotations", 12)),
+                float(a.get("inlier_mm", 0.5)), a.get("matrix"))
+            out = align_mod.apply_alignment(mesh, matrix)
+            mesh_io.save_mesh(out, a["out"])
+            return {"out": a["out"],
+                    "matrix": np.round(matrix, 8).ravel().tolist(),
+                    "registro": stats,
+                    "referencia_extents_mm": np.round(ref.extents, 3).tolist(),
+                    **mesh_io.mesh_info(out)}
         out, matrix = align_mod.align(mesh, a["mode"], a.get("region"),
                                       a.get("matrix"))
         mesh_io.save_mesh(out, a["out"])
