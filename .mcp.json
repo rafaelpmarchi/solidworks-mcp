@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "solidworks": {
+      "command": "C:/Users/peron/Documents/Github/MCP Softwares/solidworks-mcp/.venv/Scripts/swmcp.exe"
+    }
+  }
+}

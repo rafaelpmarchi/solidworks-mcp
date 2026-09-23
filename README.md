@@ -10,9 +10,16 @@ trabalha ao lado).
 
 ## Instalação
 
-Este pacote vive no monorepo `espritedge-mcp` e usa o `.venv` da raiz
-(ver o README da raiz). O servidor `solidworks` (`swmcp.exe`) já está
-registrado no `.mcp.json` do monorepo.
+```powershell
+py -3.14 -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+```
+
+O `.mcp.json` do repo registra o servidor `solidworks` (`swmcp.exe`); para
+instalar numa pasta autocontida em outra máquina, ver [INSTALAR.md](INSTALAR.md).
+
+Os dumps reais usados em parte dos testes (`tests/fixtures`) são desenhos de
+clientes e não estão no repositório; sem eles esses testes são pulados.
 
 ## Engenharia reversa (scan 3D → sólido)
 

@@ -20,9 +20,11 @@ FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
 def load(name: str) -> DrawingDump:
-    return DrawingDump.model_validate(
-        json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
-    )
+    # dumps reais são de peças de clientes: ficam fora do git (ver .gitignore)
+    path = FIXTURES / f"{name}.json"
+    if not path.exists():
+        pytest.skip(f"fixture real {name}.json ausente")
+    return DrawingDump.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 def rules_fired(report, rule_id):

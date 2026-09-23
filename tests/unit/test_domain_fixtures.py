@@ -8,6 +8,8 @@ import pytest
 from swmcp.domain.drawing import DrawingDump
 from swmcp.domain.model import ModelProperties
 
+# Os dumps são de peças de clientes e ficam só na máquina da Gromar
+# (tests/fixtures está no .gitignore); sem eles estes testes são pulados.
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 DRAWING_FIXTURES = sorted(p for p in FIXTURES.glob("*.json") if not p.stem.endswith("_model"))
 
@@ -26,6 +28,8 @@ def test_dump_real_valida_no_schema(path):
 
 
 def test_dump_e_imutavel():
+    if not DRAWING_FIXTURES:
+        pytest.skip("sem dumps reais em tests/fixtures")
     dump = DrawingDump.model_validate(
         json.loads(DRAWING_FIXTURES[0].read_text(encoding="utf-8"))
     )
@@ -35,6 +39,8 @@ def test_dump_e_imutavel():
 
 def test_model_properties_fixture():
     path = FIXTURES / "bocal_krones_model.json"
+    if not path.exists():
+        pytest.skip("sem dumps reais em tests/fixtures")
     props = ModelProperties.model_validate(json.loads(path.read_text(encoding="utf-8")))
     assert props.mass_kg is not None and props.mass_kg > 0
     assert props.bounding_box is not None

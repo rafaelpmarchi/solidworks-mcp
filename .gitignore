@@ -12,3 +12,8 @@ addin/register.log
 addin-scan/bin/
 addin-scan/obj/
 engine/.venv/
+# Material que fica só na máquina local, fora do repo público: documentação de
+# terceiros (QuickSurface) e dumps de desenhos de clientes.
+docs/Helpfile.pdf
+docs/QS2026_WEBbrochure.pdf
+tests/fixtures/
