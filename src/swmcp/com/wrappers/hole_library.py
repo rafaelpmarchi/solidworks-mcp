@@ -37,7 +37,28 @@ STANDARDS = {
 HOLE_TABLES = {
     "tap": ("DATA_HW_TappedHole", "TappedHole"),
     "simple": ("DATA_HW_DrillSizes", "DrillSizes"),
+    "clearance": ("DATA_HW_ScrewClearances", "ScrewClearances"),
 }
+
+# Ajuste do furo de folga de parafuso: coluna da tabela ScrewClearances.
+# Os nomes são os do diálogo do assistente (Fino / Normal / Largo).
+CLEARANCE_FITS = {
+    "close": "CLOSE_FIT",
+    "normal": "NORMAL_FIT",
+    "loose": "LOOSE_FIT",
+}
+
+
+def clearance_row(linha: dict[str, Any]) -> dict[str, Any]:
+    """Uma linha da tabela ScrewClearances nos números que a geometria usa."""
+    ajustes = {fit: _float(linha.get(coluna)) for fit, coluna in CLEARANCE_FITS.items()}
+    return {
+        "size": str(linha.get("SIZE")),
+        "nominal_diameter_mm": _float(linha.get("Diameter")),
+        "pitch_mm": None,
+        "fits_mm": ajustes,
+        "drill_diameter_mm": ajustes["normal"],
+    }
 
 
 def database_path(app: Any) -> Path:
@@ -93,6 +114,9 @@ def list_sizes(app: Any, standard: str = "Ansi Metric", hole_type: str = "tap") 
         tabela = _table(conn, prefixo, sufixo)
         if tabela is None:
             return []
+        if hole_type == "clearance":
+            return [clearance_row(linha) for linha in _rows(conn, tabela)
+                    if linha.get("enabled", 1)]
         brocas = {}
         tab_brocas = _table(conn, prefixo, "DATA_HW_TapDrills")
         if tab_brocas:
@@ -113,11 +137,20 @@ def list_sizes(app: Any, standard: str = "Ansi Metric", hole_type: str = "tap") 
 
 
 def resolve_size(app: Any, size: str, standard: str = "Ansi Metric",
-                 hole_type: str = "tap") -> dict[str, Any]:
-    """Dimensões de um tamanho da biblioteca; erro listando alternativas se não existir."""
+                 hole_type: str = "tap", fit: str = "normal") -> dict[str, Any]:
+    """Dimensões de um tamanho da biblioteca; erro listando alternativas se não existir.
+
+    Em furo de folga (hole_type='clearance') o Ø é o do ajuste pedido:
+    close (fino), normal ou loose (largo).
+    """
+    if hole_type == "clearance" and fit not in CLEARANCE_FITS:
+        raise ComCallError("resolve_size", (size, fit), None,
+                           f"ajuste deve ser um de {sorted(CLEARANCE_FITS)}")
     tamanhos = list_sizes(app, standard, hole_type)
     for item in tamanhos:
         if item["size"].lower() == size.strip().lower():
+            if hole_type == "clearance":
+                item = {**item, "fit": fit, "drill_diameter_mm": item["fits_mm"][fit]}
             if item["drill_diameter_mm"] is None:
                 raise ComCallError("resolve_size", (size, standard), None,
                                    f"{size} existe na biblioteca mas sem diâmetro de broca")

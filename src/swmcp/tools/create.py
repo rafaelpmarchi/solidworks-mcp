@@ -11,7 +11,26 @@ from swmcp.com.wrappers import dimensioning as dm
 from swmcp.com.wrappers import holes as h
 from swmcp.com.wrappers import modeling as m
 from swmcp.com.wrappers import output as o
+from swmcp.com.wrappers import sheetmetal as sm
+from swmcp.com.wrappers import sketch_define as sd
 from swmcp.com.wrappers import turning as t
+
+
+def _define_active(app: Any, revolution: bool = False) -> dict[str, Any] | None:
+    """Amarra o esboço aberto antes da feature (regra: esboço nenhum fica azul).
+
+    Não impede a feature: se a cotagem automática não fechar, o resultado
+    volta com fully_defined=False para quem chamou decidir o que fazer.
+    """
+    try:
+        if revolution:
+            try:
+                return dm.fully_dimension_profile(app)
+            except Exception:  # noqa: BLE001 — perfil fora da convenção de eixo em X: vai pelo geral
+                pass
+        return sd.fully_define_sketch(app)
+    except Exception as exc:  # noqa: BLE001 — cotar é auxiliar; a feature segue
+        return {"fully_defined": False, "error": str(exc)}
 
 
 def register(mcp: MCPServer, session: SwSession) -> None:
@@ -91,21 +110,31 @@ def register(mcp: MCPServer, session: SwSession) -> None:
     @mcp.tool()
     def extrude(depth_mm: float, cut: bool = False, flip: bool = False,
                 through_all: bool = False, both_directions: bool = False,
-                reverse_direction: bool = False) -> dict[str, str]:
+                reverse_direction: bool = False, fully_define: bool = True) -> dict[str, Any]:
         """Extruda o sketch ativo: boss (cut=False) ou corte (cut=True).
         through_all corta tudo; both_directions cresce para os dois lados do
         plano; reverse_direction inverte PARA QUE LADO cresce — é este que se
         usa para cortar para o outro lado. flip é outra coisa: inverte qual lado
         do perfil vira material (num corte, flip=True tira tudo MENOS o perfil).
-        Fecha o sketch."""
-        return {"feature": session.run(lambda app: m.extrude(
-            app, depth_mm, cut, flip, through_all, both_directions, reverse_direction))}
+        Fecha o sketch. fully_define (padrão) cota o esboço até ficar
+        totalmente definido ANTES de extrudar; o retorno traz sketch_definition."""
+        def run(app):
+            definicao = _define_active(app) if fully_define else None
+            nome = m.extrude(app, depth_mm, cut, flip, through_all, both_directions,
+                             reverse_direction)
+            return {"feature": nome, "sketch_definition": definicao}
+        return session.run(run)
 
     @mcp.tool()
-    def revolve(angle_deg: float = 360.0, cut: bool = False) -> dict[str, str]:
+    def revolve(angle_deg: float = 360.0, cut: bool = False,
+                fully_define: bool = True) -> dict[str, Any]:
         """Revoluciona o sketch ativo em torno da linha de centro dele
-        (desenhe uma sketch_line com centerline=True antes)."""
-        return {"feature": session.run(lambda app: m.revolve(app, angle_deg, cut))}
+        (desenhe uma sketch_line com centerline=True antes). fully_define
+        (padrão) cota o perfil antes (diâmetros e posições axiais)."""
+        def run(app):
+            definicao = _define_active(app, revolution=True) if fully_define else None
+            return {"feature": m.revolve(app, angle_deg, cut), "sketch_definition": definicao}
+        return session.run(run)
 
     @mcp.tool()
     def fillet_selected(radius_mm: float) -> dict[str, str]:
@@ -212,6 +241,38 @@ def register(mcp: MCPServer, session: SwSession) -> None:
             app, sketch_name, axial_baseline_mm, reset))
 
     @mcp.tool()
+    def fully_define_sketch(sketch_name: str = "") -> dict[str, Any]:
+        """Deixa um esboço TOTALMENTE DEFINIDO (preto) — regra da Gromar: nenhum
+        esboço fica azul. Serve para qualquer esboço: perfis de linhas (relação
+        horizontal/vertical, âncora na origem, comprimento de cada linha),
+        círculos (diâmetro + centro) e pontos soltos, como a posição dos furos
+        do assistente (alinhados em coluna/linha por relação e cotados em
+        cadeia a partir da origem: 22,5 / 17,5 / 15). Cota que sobredefiniria é
+        desfeita na hora. Sem sketch_name trabalha no esboço aberto e o deixa
+        aberto; com sketch_name abre esse esboço (list_features dá os nomes,
+        inclusive o de posição dentro de um furo), cota e fecha."""
+        return session.run(lambda app: sd.fully_define_sketch(app, sketch_name))
+
+    @mcp.tool()
+    def sheet_metal_base_flange(thickness_mm: float, depth_mm: float = 0,
+                                bend_radius_mm: float = 0, k_factor: float = 0.5,
+                                thicken_reverse: bool = False,
+                                reverse_direction: bool = False,
+                                sketch_name: str = "") -> dict[str, Any]:
+        """CHAPA METÁLICA: flange-base a partir do esboço aberto (ou nomeado).
+        Perfil ABERTO (L de cantoneira, U de bandeja) é dobrado e extrudado em
+        depth_mm; perfil FECHADO vira chapa plana. bend_radius_mm=0 usa raio
+        interno = espessura; k_factor é o fator K da planificação. A peça ganha
+        a feature Sheet-Metal e a planificação (Flat-Pattern). Desenhe o perfil
+        pela face EXTERNA e confira bodies[].box_mm: se a caixa cresceu a
+        espessura para fora, refaça com thicken_reverse invertido.
+        reverse_direction inverte o lado da extrusão. O esboço é amarrado
+        (totalmente definido) antes da feature."""
+        return session.run(lambda app: sm.sheet_metal_base_flange(
+            app, thickness_mm, depth_mm, bend_radius_mm, k_factor, thicken_reverse,
+            reverse_direction, sketch_name))
+
+    @mcp.tool()
     def select_face_at(x_mm: float, y_mm: float, z_mm: float, append: bool = False,
                        tolerance_mm: float = 0.1) -> dict[str, Any]:
         """Seleciona a face que passa pelo ponto (mm), casando pela geometria.
@@ -225,23 +286,32 @@ def register(mcp: MCPServer, session: SwSession) -> None:
                     diameter_mm: float = 0, size: str = "", standard: str = "Ansi Metric",
                     hole_type: str = "simple", thread_depth_mm: float = 0,
                     through_all: bool = False, position_mm: list[float] | None = None,
-                    add_cosmetic_thread: bool = True) -> dict[str, Any]:
+                    add_cosmetic_thread: bool = True, fit: str = "normal",
+                    positions_mm: list[list[float]] | None = None,
+                    model_positions_mm: list[list[float]] | None = None,
+                    fully_define: bool = True) -> dict[str, Any]:
         """Furo pelo ASSISTENTE DE FURAÇÃO na face apontada pelas coordenadas (mm).
         Diga o tamanho de um dos dois jeitos: size='M20x2.5' (+ standard, como no
         diálogo do assistente — o Ø da broca vem da biblioteca do SolidWorks; veja
         list_hole_sizes) ou diameter_mm avulso.
-        hole_type: simple, tap (macho reto), counterbore, countersink, taper_tap.
-        thread_depth_mm é o comprimento roscado; com size e hole_type='tap' a
-        representação de rosca entra junto (add_cosmetic_thread).
-        position_mm é o centro do furo nas coordenadas do sketch da face — o
-        padrão [0,0] é a origem (no eixo, numa face de extremidade).
+        hole_type: simple, clearance (FOLGA DE PARAFUSO — size='M6' +
+        standard='ISO', fit='close'|'normal'|'loose' = Fino/Normal/Largo do
+        diálogo; M6 fino = Ø6,4), tap (macho reto), counterbore, countersink,
+        taper_tap. thread_depth_mm é o comprimento roscado; com size e
+        hole_type='tap' a representação de rosca entra junto.
+        Posição — vários pontos = vários furos numa feature só:
+        model_positions_mm=[[x,y,z],...] em coordenadas da PEÇA (preferível: o
+        esboço da face tem eixos próprios e o X pode sair invertido);
+        positions_mm=[[x,y],...] no sketch da face; position_mm=[x,y] um ponto.
+        fully_define (padrão) deixa o esboço de posição totalmente definido.
         O retorno traz 'mode': 'standard' quando o furo saiu pela norma e
         'legacy' quando o assistente ignorou o tamanho da norma (acontece nesta
         instalação: ele gera Ø25,4) e a tool refez com as dimensões da
         biblioteca — nos dois casos a geometria conferida é a pedida."""
         return session.run(lambda app: h.hole_wizard(
             app, face_x_mm, face_y_mm, face_z_mm, depth_mm, diameter_mm, size, standard,
-            hole_type, thread_depth_mm, through_all, position_mm, add_cosmetic_thread))
+            hole_type, thread_depth_mm, through_all, position_mm, add_cosmetic_thread,
+            fit, positions_mm, model_positions_mm, fully_define))
 
     @mcp.tool()
     def cosmetic_thread(center_mm: list[float], edge_diameter_mm: float,

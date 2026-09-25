@@ -10,6 +10,7 @@ from swmcp.com import units
 from swmcp.com.invoke import ComCallError, com_call, com_get
 from swmcp.com.session import cast_to, swconst
 from swmcp.com.wrappers.modeling import _active_doc, _model
+from swmcp.domain.placement import transform_array
 
 log = logging.getLogger(__name__)
 
@@ -32,8 +33,15 @@ def _assembly(app: Any) -> Any:
     return cast_to(doc, "IAssemblyDoc")
 
 
-def insert_component(app: Any, path: str, x_mm: float = 0, y_mm: float = 0, z_mm: float = 0) -> dict[str, Any]:
-    """Insere um componente na montagem ativa (o arquivo é aberto se preciso)."""
+def insert_component(app: Any, path: str, x_mm: float = 0, y_mm: float = 0, z_mm: float = 0,
+                     rotation_deg: list[float] | None = None,
+                     fixed: bool = False) -> dict[str, Any]:
+    """Insere um componente na montagem ativa (o arquivo é aberto se preciso).
+
+    (x, y, z) é onde a ORIGEM da peça cai na montagem. rotation_deg=[rx,ry,rz]
+    gira a peça em torno dos eixos da montagem, na ordem X → Y → Z. fixed
+    deixa o componente fixo (sem posicionamento, a posição é a pedida).
+    """
     path = os.path.abspath(path)
     if not os.path.exists(path):
         raise FileNotFoundError(f"arquivo não existe: {path}")
@@ -52,7 +60,13 @@ def insert_component(app: Any, path: str, x_mm: float = 0, y_mm: float = 0, z_mm
     )
     if comp is None:
         raise ComCallError("AddComponent5", (path,), None, "componente não inserido")
-    return {"component": com_call(cast_to(comp, "IComponent2"), "Name2"), "path": path}
+    comp = cast_to(comp, "IComponent2")
+    nome = com_call(comp, "Name2")
+    posicao = None
+    if rotation_deg is not None or fixed:
+        posicao = set_component_transform(app, nome, x_mm, y_mm, z_mm,
+                                          rotation_deg or [0.0, 0.0, 0.0], fixed)
+    return {"component": nome, "path": path, "placement": posicao}
 
 
 def list_components(app: Any) -> list[dict[str, Any]]:
@@ -96,6 +110,54 @@ def set_component_fixed(app: Any, name: str, fixed: bool) -> None:
     com_call(asm, "FixComponent" if fixed else "UnfixComponent")
 
 
+def _create_transform(app: Any, array: list[float]) -> Any:
+    """IMathTransform a partir dos 16 números.
+
+    O array TEM de ir como VARIANT(VT_ARRAY|VT_R8): uma lista Python comum é
+    aceita sem erro e vira transformada identidade — o componente "não se
+    mexe" e nada avisa. Medido no SW2023.
+    """
+    import win32com.client
+
+    math_util = cast_to(com_call(app, "GetMathUtility"), "IMathUtility")
+    return com_call(math_util, "CreateTransform",
+                    win32com.client.VARIANT(8197, [float(v) for v in array]))
+
+
+def set_component_transform(app: Any, name: str, x_mm: float, y_mm: float, z_mm: float,
+                            rotation_deg: list[float] | None = None,
+                            fixed: bool | None = None) -> dict[str, Any]:
+    """Põe o componente numa posição e rotação ABSOLUTAS na montagem.
+
+    Componente fixo não aceita transformada: é liberado, posicionado e volta
+    a fixar (ou fica como fixed pedir). Confere o que o SolidWorks gravou.
+    """
+    asm = _assembly(app)
+    comp = _find_component(app, name)
+    estava_fixo = bool(com_call(comp, "IsFixed"))
+    if estava_fixo:
+        com_call(comp, "Select4", False, None, False)
+        com_call(asm, "UnfixComponent")
+    alvo = transform_array((x_mm, y_mm, z_mm), rotation_deg or (0.0, 0.0, 0.0))
+    comp.Transform2 = _create_transform(app, alvo)
+    model = _model(_active_doc(app))
+    com_call(model, "EditRebuild3")
+    gravado = list(com_call(cast_to(com_get(comp, "Transform2"), "IMathTransform"), "ArrayData"))
+    if any(abs(a - b) > 1e-6 for a, b in zip(gravado[:12], alvo[:12])):
+        raise ComCallError("Transform2", (name,), None,
+                           "o SolidWorks não aceitou a posição — o componente tem "
+                           "posicionamentos (mates) que o prendem?")
+    fixar = estava_fixo if fixed is None else fixed
+    if fixar:
+        com_call(comp, "Select4", False, None, False)
+        com_call(asm, "FixComponent")
+    com_call(model, "ClearSelection2", True)
+    caixa = com_call(comp, "GetBox", False, False)
+    return {"component": name, "origin_mm": [x_mm, y_mm, z_mm],
+            "rotation_deg": list(rotation_deg or [0.0, 0.0, 0.0]), "fixed": fixar,
+            "box_mm": [round(units.to_mm(v), 3) for v in caixa] if caixa else None}
+
+
 def move_component(app: Any, name: str, dx_mm: float, dy_mm: float, dz_mm: float) -> None:
     """Translada um componente (soma ao transform atual). Mates podem limitar."""
     comp = _find_component(app, name)
@@ -106,12 +168,7 @@ def move_component(app: Any, name: str, dx_mm: float, dy_mm: float, dz_mm: float
     data[9] += units.from_mm(dx_mm)
     data[10] += units.from_mm(dy_mm)
     data[11] += units.from_mm(dz_mm)
-    import win32com.client
-
-    math_util = com_call(app, "GetMathUtility")
-    new_xform = com_call(cast_to(math_util, "IMathUtility"), "CreateTransform",
-                         win32com.client.VARIANT(8197, data))
-    comp.Transform2 = new_xform
+    comp.Transform2 = _create_transform(app, data)
     com_call(_model(_active_doc(app)), "EditRebuild3")
 
 

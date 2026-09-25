@@ -22,9 +22,26 @@ de esboço do SolidWorks valem também para a API e arredondam o que se pede sem
 avisar. As tools sketch_* desligam esses snaps e conferem cada coordenada
 gravada; sketch_polyline desenha um perfil inteiro assim de uma vez e une o
 vértice que fecha o contorno (sem isso o esboço parece fechado e a feature é
-recusada sem explicação). Esboço feito por API nasce sub-definido: quando a
-peça tiver de ficar parametrizada, fully_dimension_profile cota o perfil de
-revolução até ele ficar preto, conferindo cota a cota.
+recusada sem explicação).
+
+REGRA DA GROMAR — ESBOÇO SEMPRE TOTALMENTE DEFINIDO (preto, nunca azul).
+Esboço feito por API nasce sub-definido; por isso extrude, revolve,
+sheet_metal_base_flange e hole_wizard já amarram o esboço sozinhos (relações
++ cotas presas à origem) e devolvem sketch_definition.fully_defined — confira
+esse campo, e se vier False resolva antes de seguir. Esboço mexido fora
+dessas tools (ou de peça antiga) se amarra com fully_define_sketch(nome),
+que serve para perfil, círculo e pontos de posição de furo;
+fully_dimension_profile é a versão para perfil de revolução (cota diametral).
+
+Chapa metálica: sheet_metal_base_flange faz a flange-base (espessura, raio,
+fator K) de um perfil aberto — L de cantoneira, U de bandeja — ou fechado
+(chapa plana), com Sheet-Metal e planificação. Desenhe pela face EXTERNA e
+confira a caixa devolvida: se a espessura cresceu para fora, refaça com
+thicken_reverse invertido.
+
+Montagem: insert_component/set_component_transform aceitam rotation_deg
+[rx,ry,rz] (eixos da montagem, ordem X→Y→Z) e fixed; conferem a posição
+gravada e devolvem a caixa do componente — use check_interference depois.
 
 Peça torneada: groove_relief faz o canal de alívio/saída de rosca com rampas em
 ângulo e raio no fundo, e flats_across faz o rebaixo plano entre-faces varrendo
@@ -43,7 +60,11 @@ mostra os tamanhos e o Ø de broca de cada um; tamanho que falte só entra pelo
 assistente, na UI). A API do assistente valida o nome do tamanho mas às vezes
 ignora as dimensões da norma e gera um furo em polegada, então a tool confere o
 que saiu e refaz com os números da biblioteca — o campo 'mode' diz se veio
-'standard' ou 'legacy', e a geometria conferida é a pedida nos dois casos. Com
+'standard' ou 'legacy', e a geometria conferida é a pedida nos dois casos.
+Furo de FOLGA de parafuso: hole_type='clearance', size='M6', standard='ISO',
+fit='close'|'normal'|'loose' (Fino/Normal/Largo; M6 fino = Ø6,4). Vários
+furos numa feature: model_positions_mm=[[x,y,z],...] em coordenadas da peça
+(o esboço da face tem eixos próprios — X pode sair invertido). Com
 hole_type='tap' a representação de rosca entra junto; para rosca externa (ou
 avulsa) use cosmetic_thread sobre a aresta achada por list_circular_edges +
 select_circular_edge, que casam a aresta pela geometria em vez de exigir um

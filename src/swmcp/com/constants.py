@@ -131,6 +131,7 @@ SKETCH_TOLERANCE_MM = 1e-4
 # polegada, com o NOME certo e a geometria errada).
 ADV_WIZARD_HOLE_TYPES = {
     "simple": "swAdvWzdStraight",
+    "clearance": "swAdvWzdStraight",   # folga de parafuso = furo reto no modo legado
     "tap": "swAdvWzdStraightTap",
     "counterbore": "swAdvWzdCounterBore",
     "countersink": "swAdvWzdCounterSink",

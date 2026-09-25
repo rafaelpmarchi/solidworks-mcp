@@ -760,18 +760,55 @@ def linear_pattern(app: Any, count1: int, spacing1_mm: float, count2: int = 1,
     Seleção esperada: features com mark=4; direção 1 (aresta/eixo) mark=1;
     direção 2 opcional mark=2.
     """
-    fm = com_get(_model(_active_doc(app)), "FeatureManager")
-    # (Num1, Spacing1, Num2, Spacing2, FlipDir1, FlipDir2, DName1, DName2,
-    #  GeometryPattern, VaryInstance, HasOffset1, HasOffset2, CtrlByNum1,
-    #  CtrlByNum2, FromCentroid1, FromCentroid2, RevOffset1, RevOffset2,
-    #  Offset1, Offset2)
-    feat = com_call(
-        fm, "FeatureLinearPattern4",
-        count1, units.from_mm(spacing1_mm), count2, units.from_mm(spacing2_mm),
-        flip1, flip2, "NULL", "NULL",
-        False, False, False, False, True, True, False, False, False, False, 0.0, 0.0,
-    )
-    return _feature_name(feat, "FeatureLinearPattern4")
+    model = _model(_active_doc(app))
+    fm = com_get(model, "FeatureManager")
+    selecao = _snapshot_selection(model)
+
+    def cria(f1: bool) -> Any:
+        # (Num1, Spacing1, Num2, Spacing2, FlipDir1, FlipDir2, DName1, DName2,
+        #  GeometryPattern, VaryInstance, HasOffset1, HasOffset2, CtrlByNum1,
+        #  CtrlByNum2, FromCentroid1, FromCentroid2, RevOffset1, RevOffset2,
+        #  Offset1, Offset2, D2PatternSeedOnly, SyncSubAssemblies)
+        return com_call(
+            fm, "FeatureLinearPattern5",
+            count1, units.from_mm(spacing1_mm), count2, units.from_mm(spacing2_mm),
+            f1, flip2, "NULL", "NULL",
+            False, False, False, False, True, True, False, False, False, False, 0.0, 0.0,
+            False, False,
+        )
+
+    feat = cria(flip1)
+    if feat is None and selecao:
+        # A direção vem da aresta, e o sentido dela é arbitrário: se as cópias
+        # caem fora da peça (abaixo do pé de uma coluna) o SolidWorks recusa
+        # sem dizer por quê. Tenta o outro sentido antes de desistir.
+        _restore_selection(model, selecao)
+        feat = cria(not flip1)
+        if feat is not None:
+            log.warning("padrão linear só saiu com a direção 1 invertida (flip1=%s)", not flip1)
+    return _feature_name(feat, "FeatureLinearPattern5")
+
+
+def _snapshot_selection(model: Any) -> list[tuple[Any, int]]:
+    """(objeto, mark) de cada item selecionado, para refazer a seleção."""
+    sm = cast_to(com_get(model, "SelectionManager"), "ISelectionMgr")
+    itens = []
+    for i in range(1, (com_call(sm, "GetSelectedObjectCount2", -1) or 0) + 1):
+        itens.append((com_call(sm, "GetSelectedObject6", i, -1),
+                      com_call(sm, "GetSelectedObjectMark", i)))
+    return itens
+
+
+def _restore_selection(model: Any, itens: list[tuple[Any, int]]) -> None:
+    sm = cast_to(com_get(model, "SelectionManager"), "ISelectionMgr")
+    com_call(model, "ClearSelection2", True)
+    for obj, mark in itens:
+        try:
+            sd = cast_to(com_call(sm, "CreateSelectData"), "ISelectData")
+            sd.Mark = mark
+            com_call(cast_to(obj, "IEntity"), "Select4", True, sd)
+        except (ComCallError, AttributeError):   # feature não é IEntity
+            com_call(cast_to(obj, "IFeature"), "Select2", True, mark)
 
 
 def circular_pattern(app: Any, count: int, angle_deg: float = 360.0,

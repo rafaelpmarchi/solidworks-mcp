@@ -12,9 +12,28 @@ from swmcp.com.wrappers import assembly as a
 
 def register(mcp: MCPServer, session: SwSession) -> None:
     @mcp.tool()
-    def insert_component(path: str, x_mm: float = 0, y_mm: float = 0, z_mm: float = 0) -> dict[str, Any]:
-        """Insere uma peça/submontagem na montagem ativa, na posição dada (mm)."""
-        return session.run(lambda app: a.insert_component(app, path, x_mm, y_mm, z_mm))
+    def insert_component(path: str, x_mm: float = 0, y_mm: float = 0, z_mm: float = 0,
+                         rotation_deg: list[float] | None = None,
+                         fixed: bool = False) -> dict[str, Any]:
+        """Insere uma peça/submontagem na montagem ativa. (x,y,z) em mm é onde
+        a ORIGEM da peça cai; rotation_deg=[rx,ry,rz] gira em torno dos eixos
+        da montagem na ordem X → Y → Z (ex.: [180,0,0] vira de cabeça para
+        baixo; [0,180,0] espelha a posição de X e Z). fixed=True fixa o
+        componente na posição pedida. Devolve a caixa do componente para
+        conferir onde ele ficou."""
+        return session.run(lambda app: a.insert_component(
+            app, path, x_mm, y_mm, z_mm, rotation_deg, fixed))
+
+    @mcp.tool()
+    def set_component_transform(name: str, x_mm: float, y_mm: float, z_mm: float,
+                                rotation_deg: list[float] | None = None,
+                                fixed: bool | None = None) -> dict[str, Any]:
+        """Posição e rotação ABSOLUTAS de um componente (mesma convenção de
+        insert_component). Libera o componente fixo para mover e volta a fixar;
+        fixed=True/False força o estado final. Confere o que foi gravado —
+        falha se posicionamentos (mates) impedirem."""
+        return session.run(lambda app: a.set_component_transform(
+            app, name, x_mm, y_mm, z_mm, rotation_deg, fixed))
 
     @mcp.tool()
     def list_components() -> list[dict[str, Any]]:

@@ -28,6 +28,7 @@ from swmcp.com.constants import ADV_WIZARD_HOLE_TYPES
 from swmcp.com.invoke import ComCallError, com_call, com_get
 from swmcp.com.session import cast_to, swconst
 from swmcp.com.wrappers import hole_library
+from swmcp.domain.placement import apply_transform
 
 log = logging.getLogger(__name__)
 
@@ -164,14 +165,19 @@ def select_face_at(app: Any, x_mm: float, y_mm: float, z_mm: float,
 # ------------------------------------------------------------------- furos
 
 def _position_sketch(feature: Any) -> Any:
-    """Sub-sketch de POSICIONAMENTO do furo (o que tem um único ponto)."""
+    """Sub-sketch de POSICIONAMENTO do furo.
+
+    O furo tem dois sub-esboços: o do perfil (com segmentos) e o de posição
+    (só pontos — um por furo). Contar "um ponto" só vale até o esboço de
+    posição ganhar o segundo furo.
+    """
     achado = None
     raw = com_get(feature, "GetFirstSubFeature")
     while raw:
         sub = cast_to(raw, "IFeature")
         if com_get(sub, "GetTypeName2") == "ProfileFeature":
             sketch = cast_to(com_call(sub, "GetSpecificFeature2"), "ISketch")
-            if len(com_call(sketch, "GetSketchPoints2") or []) == 1:
+            if (com_call(sketch, "GetSketchPoints2") or []) and not (com_call(sketch, "GetSketchSegments") or []):
                 achado = sub
         raw = com_get(sub, "GetNextSubFeature")
     return achado
@@ -207,23 +213,59 @@ def _volume_mm3(app: Any) -> float:
 HOLE_VOLUME_TOLERANCE = 0.05
 
 
-def _move_hole_to(app: Any, feature: Any, alvo: list[float]) -> str:
-    """Leva o furo para o ponto pedido nas coordenadas do sketch da face."""
-    model = _model(_active_doc(app))
-    ext = com_get(model, "Extension")
+def _position_sketch_or_fail(feature: Any) -> Any:
     sketch_pos = _position_sketch(feature)
     if sketch_pos is None:
         raise ComCallError("hole_wizard", (com_get(feature, "Name"),), None,
                            "furo criado mas sem sketch de posicionamento para centralizar")
-    nome_sketch = com_get(sketch_pos, "Name")
+    return sketch_pos
+
+
+def model_to_sketch_mm(feature: Any, pontos_modelo: list[list[float]]) -> list[list[float]]:
+    """Converte pontos da peça (mm) para as coordenadas do esboço de posição.
+
+    O esboço de uma face tem eixos próprios (na face Z=0 de uma cantoneira o X
+    do esboço sai invertido em relação ao da peça); chutar essa orientação é o
+    que põe o furo na aba errada. A transformada vem do próprio esboço.
+    """
+    sketch = cast_to(com_call(_position_sketch_or_fail(feature), "GetSpecificFeature2"), "ISketch")
+    xf = cast_to(com_call(sketch, "ModelToSketchTransform"), "IMathTransform")
+    arr = list(com_get(xf, "ArrayData"))
+    saida = []
+    for p in pontos_modelo:
+        x, y, _ = apply_transform(arr, (p[0], p[1], p[2]))
+        saida.append([round(x, 6), round(y, 6)])
+    return saida
+
+
+def _move_hole_to(app: Any, feature: Any, alvos: list[list[float]]) -> str:
+    """Põe os pontos do furo nas posições pedidas (coordenadas do sketch da face).
+
+    O assistente cria a feature com um ponto só; o primeiro é movido e os
+    demais são criados no mesmo esboço — uma feature, vários furos, como no
+    diálogo.
+    """
+    model = _model(_active_doc(app))
+    ext = com_get(model, "Extension")
+    nome_sketch = com_get(_position_sketch_or_fail(feature), "Name")
     skm = cast_to(com_get(model, "SketchManager"), "ISketchManager")
     com_call(model, "ClearSelection2", True)
     com_call(ext, "SelectByID2", nome_sketch, "SKETCH", 0.0, 0.0, 0.0, False, 0, None,
              swconst().swSelectOptionDefault)
     com_call(skm, "InsertSketch", True)
     sketch = cast_to(com_get(skm, "ActiveSketch"), "ISketch")
-    ponto = cast_to(com_call(sketch, "GetSketchPoints2")[0], "ISketchPoint")
-    com_call(ponto, "SetCoords", units.from_mm(alvo[0]), units.from_mm(alvo[1]), 0.0)
+    pontos = [cast_to(p, "ISketchPoint") for p in com_call(sketch, "GetSketchPoints2") or []]
+    for ponto, alvo in zip(pontos, alvos):
+        com_call(ponto, "SetCoords", units.from_mm(alvo[0]), units.from_mm(alvo[1]), 0.0)
+    if len(alvos) > len(pontos):
+        antes = com_get(skm, "AddToDB")
+        skm.AddToDB = True   # sem isso o ponto novo "gruda" em outra entidade por inferência
+        try:
+            for alvo in alvos[len(pontos):]:
+                if com_call(skm, "CreatePoint", units.from_mm(alvo[0]), units.from_mm(alvo[1]), 0.0) is None:
+                    raise ComCallError("CreatePoint", tuple(alvo), None, "ponto do furo não criado")
+        finally:
+            skm.AddToDB = antes
     com_call(skm, "InsertSketch", True)
     com_call(model, "ForceRebuild3", False)
     return nome_sketch
@@ -243,6 +285,10 @@ def hole_wizard(
     through_all: bool = False,
     position_mm: list[float] | None = None,
     add_cosmetic_thread: bool = True,
+    fit: str = "normal",
+    positions_mm: list[list[float]] | None = None,
+    model_positions_mm: list[list[float]] | None = None,
+    fully_define: bool = True,
 ) -> dict[str, Any]:
     """Furo do assistente de furação na face apontada pelas coordenadas (mm).
 
@@ -251,9 +297,14 @@ def hole_wizard(
       diálogo do assistente — o Ø da broca é o da norma, não um chute.
     - diameter_mm: o furo é do tamanho pedido, sem norma.
 
-    hole_type: simple, tap (macho reto), counterbore, countersink, taper_tap.
-    position_mm é o centro do furo NAS COORDENADAS DO SKETCH da face; o padrão
-    [0, 0] é a origem do sketch (no eixo, numa face de extremidade).
+    hole_type: simple, clearance (folga de parafuso, com fit close/normal/
+    loose), tap (macho reto), counterbore, countersink, taper_tap.
+    Posição, de um destes jeitos (vários pontos = vários furos numa feature):
+    - model_positions_mm: [[x,y,z], ...] na peça — o jeito seguro, porque o
+      esboço da face tem eixos próprios (X pode sair invertido);
+    - positions_mm: [[x,y], ...] nas coordenadas do sketch da face;
+    - position_mm: um ponto só no sketch; o padrão [0, 0] é a origem.
+    fully_define cota o esboço de posição até ficar totalmente definido.
 
     Com size, tenta primeiro criar o furo pela norma e CONFERE o Ø que saiu:
     medido no SW2023, o HoleWizard5 valida o nome do tamanho contra a base e
@@ -270,12 +321,30 @@ def hole_wizard(
     fm = cast_to(com_get(model, "FeatureManager"), "IFeatureManager")
     c = swconst()
     fim = c.swEndCondThroughAll if through_all else c.swEndCondBlind
-    alvo = position_mm or [0.0, 0.0]
+    if sum(v is not None for v in (position_mm, positions_mm, model_positions_mm)) > 1:
+        raise ComCallError("hole_wizard", (), None,
+                           "use só um de position_mm, positions_mm ou model_positions_mm")
+    if model_positions_mm is not None and any(len(p) != 3 for p in model_positions_mm):
+        raise ComCallError("hole_wizard", (), None, "model_positions_mm leva pontos [x, y, z]")
+    folga = hole_type == "clearance"
+
+    def alvos_de(feature: Any) -> list[list[float]]:
+        if model_positions_mm:
+            return model_to_sketch_mm(feature, model_positions_mm)
+        if positions_mm:
+            return [[float(p[0]), float(p[1])] for p in positions_mm]
+        return [list(position_mm or [0.0, 0.0])]
+
+    n_furos = len(model_positions_mm or positions_mm or [None])
 
     biblioteca = None
+    if folga and not size:
+        raise ComCallError("hole_wizard", (hole_type,), None,
+                           "furo de folga precisa de size (ex.: 'M6' com standard='ISO')")
     if size:
-        tipo_biblioteca = "tap" if hole_type in ("tap", "taper_tap") else "simple"
-        biblioteca = hole_library.resolve_size(app, size, standard, tipo_biblioteca)
+        tipo_biblioteca = ("tap" if hole_type in ("tap", "taper_tap")
+                           else "clearance" if folga else "simple")
+        biblioteca = hole_library.resolve_size(app, size, standard, tipo_biblioteca, fit)
         diameter_mm = biblioteca["drill_diameter_mm"]
     if not diameter_mm:
         raise ComCallError("hole_wizard", (size, diameter_mm), None,
@@ -293,12 +362,13 @@ def hole_wizard(
 
     cilindros_antes = _count_cylinders(app, diameter_mm)
     volume_antes = _volume_mm3(app)
-    esperado_mm3 = math.pi * (diameter_mm / 2.0) ** 2 * depth_mm
+    esperado_mm3 = math.pi * (diameter_mm / 2.0) ** 2 * depth_mm * n_furos
 
     def furo_confere() -> str | None:
         """None se o furo saiu como pedido; senão diz o que está errado."""
-        if _count_cylinders(app, diameter_mm) <= cilindros_antes:
-            return f"não apareceu nenhuma face Ø{diameter_mm:.2f}"
+        novos = _count_cylinders(app, diameter_mm) - cilindros_antes
+        if novos < n_furos:
+            return f"apareceram {novos} faces Ø{diameter_mm:.2f} para {n_furos} furo(s)"
         if not through_all:
             removido = volume_antes - _volume_mm3(app)
             if abs(removido - esperado_mm3) > esperado_mm3 * HOLE_VOLUME_TOLERANCE:
@@ -316,13 +386,16 @@ def hole_wizard(
             biblioteca["standard_index"],
             hole_library.fastener_type_index(standard, biblioteca["hole_type"]),
             biblioteca["size"], fim,
-            0.0, units.from_mm(depth_mm), units.from_mm(thread_depth_mm),
+            # furo de folga: o Ø do ajuste vai no Diameter — é assim que o
+            # assistente sai com o Fino/Largo em vez do Normal
+            units.from_mm(diameter_mm) if folga else 0.0,
+            units.from_mm(depth_mm), units.from_mm(thread_depth_mm),
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             "", False, True, True, False, False, False,
         )
         if feat is not None:
             feature = cast_to(feat, "IFeature")
-            _move_hole_to(app, feature, alvo)
+            _move_hole_to(app, feature, alvos_de(feature))
             problema = furo_confere()
             if problema is None:
                 modo = "standard"
@@ -341,7 +414,8 @@ def hole_wizard(
 
     feature = cast_to(feat, "IFeature")
     nome = com_get(feature, "Name")
-    nome_sketch = _move_hole_to(app, feature, alvo)
+    alvos = alvos_de(feature)
+    nome_sketch = _move_hole_to(app, feature, alvos)
     problema = furo_confere()
     if problema is not None:
         _delete_feature(app, feature)
@@ -356,10 +430,17 @@ def hole_wizard(
             rosca = cosmetic_thread(app, centro, diameter_mm,
                                     biblioteca["nominal_diameter_mm"] or diameter_mm,
                                     comprimento, biblioteca["size"], through_all)
-    log.info("furo %s criado: %s Ø%.2f×%.2f (%s)", hole_type, nome, diameter_mm, depth_mm, modo)
-    return {"feature": nome, "position_sketch": nome_sketch, "position_mm": alvo,
-            "drill_diameter_mm": round(diameter_mm, 4), "mode": modo,
-            "library": biblioteca, "cosmetic_thread": rosca}
+    definicao = None
+    if fully_define:
+        from swmcp.com.wrappers import sketch_define
+        definicao = sketch_define.fully_define_sketch(app, nome_sketch)
+    log.info("furo %s criado: %s %d× Ø%.2f×%.2f (%s)", hole_type, nome, n_furos,
+             diameter_mm, depth_mm, modo)
+    return {"feature": nome, "position_sketch": nome_sketch,
+            "position_mm": alvos[0], "positions_mm": alvos,
+            "holes": n_furos, "drill_diameter_mm": round(diameter_mm, 4), "mode": modo,
+            "library": biblioteca, "cosmetic_thread": rosca,
+            "sketch_definition": definicao}
 
 
 def _hole_mouth_center(app: Any, diameter_mm: float,

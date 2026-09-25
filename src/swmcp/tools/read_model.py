@@ -28,7 +28,9 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         """Tamanhos da biblioteca de furos do SolidWorks (a base do assistente
         de furação), como o diálogo os lista: nome, Ø nominal, passo e Ø da
         broca. Somente-leitura. standard: Ansi Metric, ISO, DIN, JIS, Ansi Inch;
-        hole_type: tap (furo roscado) ou simple (tamanhos de broca). contains
+        hole_type: tap (furo roscado), simple (tamanhos de broca) ou clearance
+        (folga de parafuso — cada tamanho traz fits_mm com os Ø dos ajustes
+        close/normal/loose, o Fino/Normal/Largo do diálogo). contains
         filtra pelo nome ('M20'). Use o nome daqui no size do hole_wizard — se o
         tamanho não estiver na lista, ele precisa ser acrescentado à biblioteca
         pelo assistente de furação do SolidWorks."""
