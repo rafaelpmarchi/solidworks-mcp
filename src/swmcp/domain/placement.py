@@ -62,6 +62,24 @@ def transform_array(origin_mm: Sequence[float],
     return [*colunas, x, y, z, 1.0, 0.0, 0.0, 0.0]
 
 
+def to_local(array: Sequence[float], point_mm: Sequence[float]) -> tuple[float, float, float]:
+    """Inverso de apply_transform: ponto da montagem → coordenadas da peça.
+
+    A rotação é ortonormal, então a inversa é a transposta:
+    p = (p' − T) · Rᵀ  →  p_i = Σ_j (p'_j − T_j) · a[3i + j].
+    """
+    a = array
+    escala = a[12] if len(a) > 12 and a[12] else 1.0
+    q = [float(point_mm[j]) - a[9 + j] * 1000.0 for j in range(3)]
+    return tuple(sum(q[j] * a[3 * i + j] for j in range(3)) / escala for i in range(3))  # type: ignore[return-value]
+
+
+def direction_to_local(array: Sequence[float], direction: Sequence[float]) -> tuple[float, float, float]:
+    """Direção (sem translação) da montagem para a peça."""
+    a = array
+    return tuple(sum(float(direction[j]) * a[3 * i + j] for j in range(3)) for i in range(3))  # type: ignore[return-value]
+
+
 def apply_transform(array: Sequence[float], point_mm: Sequence[float]) -> tuple[float, float, float]:
     """Aplica um ArrayData a um ponto em mm (mesma convenção do SolidWorks)."""
     x, y, z = (float(v) for v in point_mm)

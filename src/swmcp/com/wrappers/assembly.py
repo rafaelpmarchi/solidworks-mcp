@@ -62,10 +62,13 @@ def insert_component(app: Any, path: str, x_mm: float = 0, y_mm: float = 0, z_mm
         raise ComCallError("AddComponent5", (path,), None, "componente não inserido")
     comp = cast_to(comp, "IComponent2")
     nome = com_call(comp, "Name2")
-    posicao = None
-    if rotation_deg is not None or fixed:
-        posicao = set_component_transform(app, nome, x_mm, y_mm, z_mm,
-                                          rotation_deg or [0.0, 0.0, 0.0], fixed)
+    # AddComponent5 põe o CENTRO DA CAIXA do componente em (x,y,z), não a
+    # origem da peça (medido no SW2023: pino 0..30 em y=14 caiu em -1..29).
+    # A posição é sempre refeita pela origem, que é o que a tool promete.
+    # fixed=False não solta nada: o 1º componente da montagem o SolidWorks
+    # já fixa sozinho, e isso fica como está (None = manter o estado)
+    posicao = set_component_transform(app, nome, x_mm, y_mm, z_mm,
+                                      rotation_deg or [0.0, 0.0, 0.0], True if fixed else None)
     return {"component": nome, "path": path, "placement": posicao}
 
 
@@ -195,12 +198,17 @@ def check_interference(app: Any) -> list[dict[str, Any]]:
     return out
 
 
+ALIGNMENTS = {"aligned": "swMateAlignALIGNED", "anti_aligned": "swMateAlignANTI_ALIGNED",
+              "closest": "swMateAlignCLOSEST"}
+
+
 def add_mate(app: Any, mate_type: str, distance_mm: float = 0.0, angle_deg: float = 0.0,
-             flip: bool = False) -> str:
+             flip: bool = False, alignment: str = "closest") -> str:
     """Cria um mate entre as DUAS entidades selecionadas (select_entity com append).
 
     mate_type: coincident, concentric, distance, parallel, perpendicular,
-    tangent, angle, lock.
+    tangent, angle, lock. alignment: closest (o SolidWorks escolhe o mais
+    perto da posição atual), aligned ou anti_aligned.
     """
     asm = _assembly(app)
     c = swconst()
@@ -209,11 +217,14 @@ def add_mate(app: Any, mate_type: str, distance_mm: float = 0.0, angle_deg: floa
     except KeyError:
         raise ComCallError("AddMate5", (mate_type,), None,
                            f"tipo inválido; use um de {sorted(MATE_TYPES)}") from None
+    if alignment not in ALIGNMENTS:
+        raise ComCallError("AddMate5", (alignment,), None,
+                           f"alinhamento inválido; use um de {sorted(ALIGNMENTS)}")
     d = units.from_mm(distance_mm)
     a = units.from_deg(angle_deg)
     mate, error = com_call(
         asm, "AddMate5",
-        mtype, c.swMateAlignCLOSEST, flip,
+        mtype, getattr(c, ALIGNMENTS[alignment]), flip,
         d, d, d, 0.0, 0.0, a, a, a, False, False, 0, 0,
     )
     if mate is None or error != 1:  # swAddMateError_NoError = 1

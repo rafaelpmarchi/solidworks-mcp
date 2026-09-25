@@ -39,9 +39,18 @@ fator K) de um perfil aberto — L de cantoneira, U de bandeja — ou fechado
 confira a caixa devolvida: se a espessura cresceu para fora, refaça com
 thicken_reverse invertido.
 
-Montagem: insert_component/set_component_transform aceitam rotation_deg
-[rx,ry,rz] (eixos da montagem, ordem X→Y→Z) e fixed; conferem a posição
-gravada e devolvem a caixa do componente — use check_interference depois.
+Montagem: insert_component/set_component_transform põem a ORIGEM da peça em
+(x,y,z) com rotation_deg [rx,ry,rz] (eixos da montagem, ordem X→Y→Z) e
+fixed; conferem a posição gravada e devolvem a caixa do componente.
+Prefira REFERÊNCIAS a posição fixa: select_component_entity escolhe face/
+aresta/vértice/plano de um componente pela geometria (coordenadas da
+montagem; cilindro e círculo pedem radius_mm) e add_mate (com alignment)
+cria o mate. list_mates lê os mates de um componente;
+replicate_component copia um componente para outros lugares refazendo os
+mesmos mates nas entidades correspondentes (porta-etiqueta de um rasgo para
+os outros rasgos) e confere que a cópia não saiu do lugar;
+replace_component troca o arquivo mantendo posição e mates; mate_errors
+mostra mate com referência perdida. Depois, check_interference.
 
 Peça torneada: groove_relief faz o canal de alívio/saída de rosca com rampas em
 ângulo e raio no fundo, e flats_across faz o rebaixo plano entre-faces varrendo
