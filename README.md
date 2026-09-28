@@ -56,23 +56,6 @@ da API em [docs/decisoes/0006-cantos-de-abertura.md](docs/decisoes/0006-cantos-d
 .venv\Scripts\python -m pytest tests/integration -m integration   # exigem SolidWorks aberto
 ```
 
-## Chat dentro do SolidWorks (add-in)
-
-O add-in `addin/` cria um taskpane "Claude" dentro do SolidWorks com um chat
-que usa as mesmas ferramentas (status, dump, revisão) direto na API Anthropic.
-
-```powershell
-cd addin
-dotnet build -c Release
-# como administrador:
-powershell -ExecutionPolicy Bypass -File .\register.ps1
-```
-
-Depois: SolidWorks → Ferramentas → Suplementos → **Claude**. O backend
-(`python -m swmcp.chat`, porta local 8765) é iniciado automaticamente pelo
-add-in. Credencial: variável de ambiente `ANTHROPIC_API_KEY` (ou perfil
-`ant auth login`).
-
 ## Estrutura
 
 - `src/swmcp/com/` — única camada que toca win32com (STA worker, invoke fail-fast, unidades)

@@ -27,30 +27,37 @@ nesta build, então a decimação é por agrupamento em grade (numpy puro).
 
 ## Add-in "Scan 3D" (estilo QuickSurface/Mesh2Surface)
 
-Add-in PRÓPRIO em `addin-scan/` (separado do add-in Claude), calcado na UI do
+Add-in PRÓPRIO em `addin-scan/`, calcado na UI do
 Mesh2Surface (screenshots do usuário + docs oficiais):
 
 - **Fluxo nativo (2026-08-27)**: os botões do ribbon abrem **PropertyManager
   nativo à esquerda** (✓/✗ e campos, como qualquer comando do SolidWorks —
   `addin-scan/Pmp.cs`), executam no backend HTTP (`Backend.cs`) e mostram o
   resultado em diálogo do SW (estilo "Mesh Information" do M2S). Ações sem
-  parâmetro (Importar/Exportar/Info/Inverter/Simetria) rodam direto. A
-  "região ativa" dos comandos é a seleção pintada no viewer do painel
-  (`region={"active": true}` → máscara), ou a malha toda.
+  parâmetro (Importar/Exportar/Info/Inverter/Simetria) rodam direto. Os
+  comandos atuam na malha toda (`region={"active": true}` só usa máscara se
+  alguma tiver sido salva via MCP).
 - **Aba "Scan 3D" no CommandManager** com os comandos na ordem do original:
   Importar scan · Exportar · Decimar · Info da malha · Inverter normais ·
   Seleção de malha · Alinhar por referências · Plano de simetria · Primitivas ·
-  Superfície automática · Seção transversal · Comparar. Cada botão abre o
-  grupo correspondente no painel.
-- **Taskpane claro** (tema PropertyManager) servido por `python -m swmcp.chat`
-  na rota `/scan` (`src/swmcp/chat/web/scan.html`); rotas diretas sem LLM em
-  `src/swmcp/chat/panel.py`. Região selecionada na lista vale para primitivas,
-  freeform e assentamento.
+  Superfície automática · Seção transversal · Comparar. A aba é recriada a
+  cada carga (a restaurada do registro fica fantasma no SW 2023) e nasce
+  selecionada; no 1º documento de cada tipo o add-in devolve a seleção para
+  a primeira aba nativa (Recursos/Montagem) via `ICommandTab.Active`.
+- Backend subido com ShellExecute (não herda handles do SW — herdando, um
+  backend órfão travava o diário `swxJRNL` do próximo SW) e encerrado com
+  `taskkill /T` (o python do venv é lançador de outro processo).
+- Conflito conhecido (2026-09-28): Mavito ERP + PDM + 3DEXPERIENCE
+  Marketplace carregando juntos na inicialização derrubam o SW 2023 ao abrir;
+  qualquer dois deles funcionam. Manter o Marketplace desligado.
+- **Sem taskpane (2026-09-28)**: o painel lateral com viewer three.js foi
+  removido a pedido do usuário. O backend `python -m swmcp.chat` continua
+  (rotas diretas sem LLM em `src/swmcp/chat/panel.py`), subido pelo add-in a
+  partir de `solidworks-mcp\.venv`.
 - Registro (admin): `cd addin-scan; dotnet build -c Release;`
   depois `powershell -ExecutionPolicy Bypass -File .\register.ps1` como admin.
-- O add-in Claude (`addin/`) voltou a ser só o chat.
 
-Estado compartilhado: `%TEMP%/swengine/state.json` — o painel, o chat e o MCP
+Estado compartilhado: `%TEMP%/swengine/state.json` — o add-in, o chat e o MCP
 enxergam a mesma malha ativa.
 
 Paridade adicional (guiada pela brochura QS2026 e pelo Helpfile em docs/):
@@ -63,33 +70,6 @@ Paridade adicional (guiada pela brochura QS2026 e pelo Helpfile em docs/):
   cilindro em X/Y/Z — os botões Vertical/Horizontal do Mesh2Surface.
 - **Desvio Passa/Falha** (`pass_fail_tol_mm`): verde dentro de ±tol, gradiente
   até 5×tol, e % dentro da tolerância no resultado.
-
-### Visualizador 3D no painel (fases 2-5 do plano de paridade)
-
-O painel tem um viewer three.js (servido localmente, `web/viewer.js` +
-`web/vendor/`) com a malha decimada (~80k faces, binário compacto via
-`viewerpack`). Ferramentas na toolbar do viewer:
-
-- 🔄 órbita · 🖌 **pincel** de seleção (⌫ remove) · ✨ **varinha mágica**
-  (expansão por ângulo de normal; o slider é raio do pincel em mm E
-  sensibilidade da varinha em graus) · ✏ **3D sketch** sobre o scan
-- ✔ transforma a seleção pintada em **região** (máscara na malha cheia via
-  `savemask`) — a partir daí primitivas/freeform/desvio/assentamento usam a
-  seleção em vez da lista de regiões
-- ⭱ envia as curvas do 3D sketch como **sketch 3D nativo** no SolidWorks
-  (`sketch_3d_splines`, spline por curva, pontos grudados na malha)
-- **Editar superfície** (grupo freeform): abre a grade de controle da
-  B-spline no viewer — arrastar os pontos azuis recalcula a superfície em
-  tempo real com colorização por tolerância (verde dentro, gradiente até 5×);
-  "Gravar STEP" reconstrói via OpenCascade (`freeform_step`).
-- **Desenrolar**: cilindro/cone exatos (costura configurável) ou LSCM para
-  dupla curvatura com % de distorção; "→ Sketch de corte" desenha o contorno
-  planificado no sketch ativo.
-
-Limitação honesta restante vs QuickSurface: a interação 3D acontece no
-viewer do PAINEL, não no viewport do SolidWorks (isso exigiria renderização
-OpenGL dentro do SW); e o freeform editável é 1 patch por vez, sem
-bridge/merge de arestas nem continuidade G2 multi-patch.
 
 ## Fluxo típico (via chat/Claude)
 

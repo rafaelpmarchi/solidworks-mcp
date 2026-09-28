@@ -7,7 +7,7 @@ $admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 if (-not $admin) {
     Write-Host "Elevando (confirme no UAC)..."
-    $argumentos = @("-ExecutionPolicy", "Bypass", "-File", $PSCommandPath)
+    $argumentos = @("-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
     $p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList $argumentos
     if ($p.ExitCode -eq 0) { Write-Host "Add-in registrado com sucesso." }
     else { Write-Host "Falhou (codigo $($p.ExitCode)). Veja a janela elevada." }

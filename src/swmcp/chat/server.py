@@ -44,9 +44,6 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in ("/", "/index.html"):
             body = (WEB_DIR / "index.html").read_bytes()
             self._respond(200, "text/html; charset=utf-8", body)
-        elif parsed.path in ("/scan", "/scan.html"):
-            body = (WEB_DIR / "scan.html").read_bytes()
-            self._respond(200, "text/html; charset=utf-8", body)
         elif parsed.path == "/viewer.js":
             self._respond(200, "text/javascript",
                           (WEB_DIR / "viewer.js").read_bytes())

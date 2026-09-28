@@ -1,7 +1,7 @@
 // Add-in "Scan 3D" (Gromar) — engenharia reversa estilo QuickSurface.
-// Taskpane com o painel de comandos + aba própria no CommandManager cujos
-// botões abrem o grupo correspondente do painel. O processamento roda no
-// backend local (python -m swmcp.chat) e no motor swengine (WSL/venv).
+// Aba própria no CommandManager; cada botão abre um PropertyManager nativo.
+// O processamento roda no backend local (python -m swmcp.chat) e no motor
+// swengine (WSL/venv).
 
 using System;
 using System.IO;
@@ -23,33 +23,33 @@ namespace SwScanAddin
         private const string DESCRIPTION =
             "Engenharia reversa Gromar: scan 3D -> sólido (primitivas, seções, freeform, desvio)";
         private const string BACKEND_URL = "http://127.0.0.1:8765/";
-        private const string PANEL_URL = BACKEND_URL + "scan";
         private const int CMD_GROUP_ID = 51;
 
         private ISldWorks? _app;
         private int _cookie;
-        private ITaskpaneView? _taskpane;
-        private PanelControl? _control;
         private System.Diagnostics.Process? _backend;
         private ICommandManager? _cmdMgr;
+        private SldWorks? _swEventos;
+        private bool _docTrocou;
+        private readonly System.Collections.Generic.HashSet<int> _abaDevolvida = new();
 
-        // (título, dica, âncora do grupo no painel) — ordem = índice na tira de ícones
-        private static readonly (string Nome, string Dica, string Anchor)[] CMDS =
+        // (título, dica) — ordem = índice na tira de ícones
+        private static readonly (string Nome, string Dica)[] CMDS =
         {
-            ("Importar scan", "Importar malha do scanner (STL/OBJ/PLY)", "g-scan"),
-            ("Exportar", "Exportar a malha ativa (STL/OBJ/PLY)", "g-scan"),
-            ("Decimar", "Reduzir a quantidade de triângulos", "g-scan"),
-            ("Info da malha", "Vértices, faces e dimensões", "g-scan"),
-            ("Inverter normais", "Inverter a orientação da malha", "g-scan"),
-            ("Seleção de malha", "Segmentar regiões usinadas × fundidas", "g-regioes"),
-            ("Alinhar por referências", "Alinhar o scan aos eixos", "g-align"),
-            ("Plano de simetria", "Detectar o plano de simetria da peça", "g-sym"),
-            ("Primitivas", "Ajustar plano/cilindro/esfera/cone", "g-prim"),
-            ("Superfície automática", "Freeform -> STEP", "g-ff"),
-            ("Seção transversal", "Cortar o scan e desenhar no sketch", "g-sec"),
-            ("Comparar", "Mapa de desvio scan × CAD", "g-dev"),
-            ("Desenrolar", "Planificar chapa/tubo (roll-unroll)", "g-unroll"),
-            ("Viewport GL (teste)", "Liga/desliga o triângulo de teste OpenGL no viewport", ""),
+            ("Importar scan", "Importar malha do scanner (STL/OBJ/PLY)"),
+            ("Exportar", "Exportar a malha ativa (STL/OBJ/PLY)"),
+            ("Decimar", "Reduzir a quantidade de triângulos"),
+            ("Info da malha", "Vértices, faces e dimensões"),
+            ("Inverter normais", "Inverter a orientação da malha"),
+            ("Seleção de malha", "Segmentar regiões usinadas × fundidas"),
+            ("Alinhar por referências", "Alinhar o scan aos eixos"),
+            ("Plano de simetria", "Detectar o plano de simetria da peça"),
+            ("Primitivas", "Ajustar plano/cilindro/esfera/cone"),
+            ("Superfície automática", "Freeform -> STEP"),
+            ("Seção transversal", "Cortar o scan e desenhar no sketch"),
+            ("Comparar", "Mapa de desvio scan × CAD"),
+            ("Desenrolar", "Planificar chapa/tubo (roll-unroll)"),
+            ("Viewport GL (teste)", "Liga/desliga o triângulo de teste OpenGL no viewport"),
         };
 
         public bool ConnectToSW(object thisSw, int cookie)
@@ -59,35 +59,41 @@ namespace SwScanAddin
             _app.SetAddinCallbackInfo2(0, this, cookie);
 
             EnsureBackendRunning();
-            CreateTaskpane();
             CreateCommandTab();
+
+            _swEventos = (SldWorks)thisSw;
+            _swEventos.ActiveModelDocChangeNotify += AoTrocarDocumento;
+            _swEventos.OnIdleNotify += AoFicarOcioso;
             return true;
         }
 
         public bool DisconnectFromSW()
         {
+            if (_swEventos != null)
+            {
+                _swEventos.ActiveModelDocChangeNotify -= AoTrocarDocumento;
+                _swEventos.OnIdleNotify -= AoFicarOcioso;
+                _swEventos = null;
+            }
             try { _cmdMgr?.RemoveCommandGroup2(CMD_GROUP_ID, true); } catch { }
-            try { _control?.Dispose(); } catch { }
-            try { _taskpane?.DeleteView(); } catch { }
-            if (_taskpane != null) Marshal.FinalReleaseComObject(_taskpane);
-            _taskpane = null;
-            _control = null;
-            try { if (_backend != null && !_backend.HasExited) _backend.Kill(); } catch { }
+            // o python.exe do venv é um lançador que cria outro python: mata a árvore
+            try
+            {
+                if (_backend != null && !_backend.HasExited)
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "taskkill",
+                        Arguments = "/T /F /PID " + _backend.Id,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    })?.WaitForExit(5000);
+            }
+            catch { }
             _backend = null;
             _app = null;
             GC.Collect();
             GC.WaitForPendingFinalizers();
             return true;
-        }
-
-        private void CreateTaskpane()
-        {
-            var dir = Path.GetDirectoryName(typeof(ScanAddin).Assembly.Location) ?? "";
-            var iconPath = Path.Combine(dir, "scan-icon.bmp");
-            _taskpane = (ITaskpaneView)_app!.CreateTaskpaneView2(
-                File.Exists(iconPath) ? iconPath : "", TITLE);
-            _control = new PanelControl(PANEL_URL);
-            _taskpane.DisplayWindowFromHandlex64(_control.Handle.ToInt64());
         }
 
         private void CreateCommandTab()
@@ -115,7 +121,18 @@ namespace SwScanAddin
             group.HasMenu = true;
             group.Activate();
 
-            // aba no CommandManager (como o QuickSurface) para peça e montagem
+            var cmdIds = new int[CMDS.Length];
+            var styles = new int[CMDS.Length];
+            for (int i = 0; i < CMDS.Length; i++)
+            {
+                cmdIds[i] = group.CommandID[ids[i]];
+                styles[i] = (int)swCommandTabButtonTextDisplay_e
+                    .swCommandTabButton_TextBelow;
+            }
+
+            // aba no CommandManager (como o QuickSurface) para peça e montagem.
+            // Recria a cada carga: no SW 2023 a aba que ele restaura do registro
+            // não é desenhada na fita (fica fantasma) se for reaproveitada.
             foreach (var docType in new[] { (int)swDocumentTypes_e.swDocPART,
                                             (int)swDocumentTypes_e.swDocASSEMBLY })
             {
@@ -124,23 +141,53 @@ namespace SwScanAddin
                 if (existente != null) _cmdMgr.RemoveCommandTab(existente);
                 var tab = _cmdMgr.AddCommandTab(docType, TITLE);
                 if (tab == null) continue;
-                var box = tab.AddCommandTabBox();
-                var cmdIds = new int[CMDS.Length];
-                var styles = new int[CMDS.Length];
-                for (int i = 0; i < CMDS.Length; i++)
-                {
-                    cmdIds[i] = group.CommandID[ids[i]];
-                    styles[i] = (int)swCommandTabButtonTextDisplay_e
-                        .swCommandTabButton_TextBelow;
-                }
-                box.AddCommands(cmdIds, styles);
+                tab.AddCommandTabBox().AddCommands(cmdIds, styles);
             }
         }
 
-        private void ShowGroup(string anchor)
+        // Aba recém-criada nasce selecionada: no 1º documento de cada tipo da
+        // sessão, depois que o SW termina de montar a fita (ocioso), devolve a
+        // seleção para a primeira aba nativa (Recursos / Montagem).
+        private int AoTrocarDocumento()
         {
-            try { _taskpane?.ShowView(); } catch { }
-            _control?.ShowGroup(anchor);
+            _docTrocou = true;
+            return 0;
+        }
+
+        private int AoFicarOcioso()
+        {
+            if (!_docTrocou) return 0;
+            _docTrocou = false;
+            try
+            {
+                if (_app?.IActiveDoc2 is not ModelDoc2 doc) return 0;
+                int tipo = doc.GetType();
+                if (tipo != (int)swDocumentTypes_e.swDocPART &&
+                    tipo != (int)swDocumentTypes_e.swDocASSEMBLY) return 0;
+                if (_abaDevolvida.Add(tipo)) SelecionaPrimeiraAba(tipo);
+            }
+            catch { }
+            return 0;
+        }
+
+        private void SelecionaPrimeiraAba(int docType)
+        {
+            // o CommandManager deste add-in só enxerga as próprias abas; as
+            // nativas aparecem pelo de qualquer outro cookie
+            for (int ck = 1; ck < 64; ck++)
+            {
+                if (ck == _cookie) continue;
+                try
+                {
+                    if (_app!.GetCommandManager(ck)?.CommandTabs(docType) is not object[] tabs ||
+                        tabs.Length < 2) continue;
+                    var primeira = (CommandTab)tabs[0];
+                    if (primeira.Name == TITLE) continue;
+                    primeira.Active = true;
+                    return;
+                }
+                catch { }
+            }
         }
 
         // ------------------------------------------- fluxo nativo (M2S-like)
@@ -164,8 +211,6 @@ namespace SwScanAddin
                 (int)swMessageBoxIcon_e.swMbWarning,
                 (int)swMessageBoxBtn_e.swMbOk);
 
-        private void AtualizaViewer() => _control?.Refresh3D();
-
         // Importar: diálogo de arquivo -> import -> "Mesh Information"
         public void OnCmd0()
         {
@@ -177,7 +222,6 @@ namespace SwScanAddin
                 Info("Informações da malha", Backend.Formatar(r,
                     "vertices", "faces", "extents_mm", "watertight",
                     "area_mm2", "volume_mm3", "aviso_unidade"));
-                AtualizaViewer();
             }
             catch (Exception ex) { Erro("Importar scan", ex); }
         }
@@ -207,7 +251,6 @@ namespace SwScanAddin
             {
                 var r = Backend.Post("decimate",
                     J("target_faces", (int)(double)v["target_faces"]));
-                AtualizaViewer();
                 return Backend.Formatar(r, "vertices", "faces", "extents_mm");
             },
         });
@@ -230,7 +273,6 @@ namespace SwScanAddin
             {
                 var r = Backend.Post("flip");
                 Info("Inverter normais", "normais invertidas (" + r["faces"] + " faces)");
-                AtualizaViewer();
             }
             catch (Exception ex) { Erro("Inverter normais", ex); }
         }
@@ -238,8 +280,7 @@ namespace SwScanAddin
         public void OnCmd5() => Pmp.Mostrar(_app!, new PaginaCmd
         {
             Titulo = "Seleção de malha",
-            Dica = "Separa regiões usinadas (lisas) do bruto de fundição. " +
-                   "Para seleção manual, use o pincel/varinha no viewer do painel.",
+            Dica = "Separa regiões usinadas (lisas) do bruto de fundição.",
             Campos = new[]
             {
                 new Campo { Tipo = "num", Rotulo = "Limiar de curvatura (graus)",
@@ -249,11 +290,9 @@ namespace SwScanAddin
             Executar = v =>
             {
                 var r = Backend.Post("segment", v);
-                AtualizaViewer();
                 var regs = (object[])r["regioes_lisas"];
                 return regs.Length + " regiões lisas encontradas · " +
-                       r["vertices_rugosos"] + " vértices rugosos (fundição).\n" +
-                       "As regiões estão coloridas no viewer do painel.";
+                       r["vertices_rugosos"] + " vértices rugosos (fundição).";
             },
         });
 
@@ -275,7 +314,6 @@ namespace SwScanAddin
                 if ((string)v["mode"] == "plane_to_xy")
                     corpo["region"] = RegiaoAtiva();
                 var r = Backend.Post("align", corpo);
-                AtualizaViewer();
                 return "alinhado (" + v["mode"] + ")\n" +
                        Backend.Formatar(r, "extents_mm");
             },
@@ -297,7 +335,7 @@ namespace SwScanAddin
         public void OnCmd8() => Pmp.Mostrar(_app!, new PaginaCmd
         {
             Titulo = "Primitivas",
-            Dica = "Ajusta na região ativa (seleção do viewer, se houver).",
+            Dica = "Ajusta na malha inteira.",
             Campos = new[]
             {
                 new Campo { Tipo = "combo", Rotulo = "Tipo", Chave = "kind",
@@ -366,9 +404,7 @@ namespace SwScanAddin
                 var r = Backend.Post("freeform", v);
                 return "STEP: " + r["step"] + "\n" + Backend.Formatar(r,
                     "desvio_rms_mm", "desvio_p95_mm", "desvio_max_mm",
-                    "cobertura_grade", "aviso") +
-                    "\n\nPara editar a superfície ponto a ponto, use " +
-                    "'Editar superfície' no painel.";
+                    "cobertura_grade", "aviso");
             },
         });
 
@@ -402,7 +438,7 @@ namespace SwScanAddin
         {
             Titulo = "Comparar (desvio)",
             Dica = "Escolha o STL do modelo reconstruído após o OK. O mapa " +
-                   "colorido aparece no painel.",
+                   "colorido sai em PNG.",
             Campos = new[]
             {
                 new Campo { Tipo = "check", Rotulo = "Modo Passa/Falha",
@@ -495,7 +531,11 @@ namespace SwScanAddin
             }
             else
             {
-                file = @"C:\Users\peron\Documents\Github\espritedge-mcp\.venv\Scripts\python.exe";
+                // bin\Release\SwScanAddin.dll -> solidworks-mcp\.venv
+                var dll = typeof(ScanAddin).Assembly.Location;
+                var raiz = Path.GetFullPath(Path.Combine(
+                    Path.GetDirectoryName(dll) ?? ".", "..", "..", ".."));
+                file = Path.Combine(raiz, ".venv", "Scripts", "python.exe");
                 args = "-m swmcp.chat";
             }
             try
@@ -505,8 +545,11 @@ namespace SwScanAddin
                     {
                         FileName = file,
                         Arguments = args,
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
+                        // ShellExecute: o backend NÃO herda os handles do
+                        // SolidWorks. Com UseShellExecute=false ele herdava o
+                        // diário (swxJRNL) e caches; órfão, travava o próximo SW.
+                        UseShellExecute = true,
+                        WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
                         WorkingDirectory = Path.GetDirectoryName(file) ?? ".",
                     });
                 for (int i = 0; i < 20 && !BackendAlive(); i++)
@@ -514,7 +557,7 @@ namespace SwScanAddin
             }
             catch
             {
-                // sem backend o WebView mostra erro com instruções
+                // sem backend os comandos avisam o erro ao serem usados
             }
         }
 

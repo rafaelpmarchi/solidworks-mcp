@@ -61,8 +61,6 @@ a tool `sw_status` deve responder com a versão e os documentos abertos.
 - **Engenharia reversa (tools `mesh_*`)**: precisa de um motor de geometria
   separado — ver `docs/engenharia-reversa.md` (venv em `engine\.venv` ou WSL).
   Sem ele, todas as outras tools funcionam normalmente.
-- **Add-in de chat dentro do SolidWorks** (`addin\`): exige .NET SDK e uma
-  chave da API Anthropic — ver README.md.
 - **Biblioteca de templates/perfis compartilhada**: a tool
   `set_file_location` / `apply_kongz_library` aponta o SolidWorks para as
   pastas da sua biblioteca.

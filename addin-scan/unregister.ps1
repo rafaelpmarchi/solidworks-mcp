@@ -7,7 +7,7 @@ $admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 if (-not $admin) {
     Write-Host "Elevando (confirme no UAC)..."
-    $argumentos = @("-ExecutionPolicy", "Bypass", "-File", $PSCommandPath)
+    $argumentos = @("-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
     $p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList $argumentos
     exit $p.ExitCode
 }
