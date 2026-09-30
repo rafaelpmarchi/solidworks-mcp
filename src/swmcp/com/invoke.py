@@ -11,6 +11,8 @@ import logging
 import time
 from typing import Any
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 log = logging.getLogger(__name__)
 
 # HRESULTs que indicam que o SolidWorks fechou/caiu no meio da sessão (RNF-07)
@@ -24,8 +26,13 @@ DISCONNECTED_HRESULTS = frozenset(
 )
 
 
-class ComCallError(RuntimeError):
-    """Falha numa chamada COM, com contexto completo para diagnóstico."""
+class ComCallError(ToolError, RuntimeError):
+    """Falha numa chamada COM, com contexto completo para diagnóstico.
+
+    Herda de ToolError para o texto chegar ao modelo: sem isso o framework MCP
+    trata a exceção como crash e o cliente só vê "Error executing tool X" —
+    o motivo real ("o furo saiu diferente do pedido...") fica só no log.
+    """
 
     def __init__(
         self,

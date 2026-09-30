@@ -274,12 +274,13 @@ def register(mcp: MCPServer, session: SwSession) -> None:
 
     @mcp.tool()
     def select_face_at(x_mm: float, y_mm: float, z_mm: float, append: bool = False,
-                       tolerance_mm: float = 0.1) -> dict[str, Any]:
+                       tolerance_mm: float = 0.1, mark: int = 0) -> dict[str, Any]:
         """Seleciona a face que passa pelo ponto (mm), casando pela geometria.
         Use quando select_entity(FACE) devolver 'nada selecionado' mesmo com o
         ponto em cima da face: o SelectByID2 por coordenadas depende do estado
-        da janela ativa, este não."""
-        return session.run(lambda app: h.select_face_at(app, x_mm, y_mm, z_mm, append, tolerance_mm))
+        da janela ativa, este não. mark é a marca de seleção que a feature
+        seguinte espera (eixo de circular_pattern: mark=1)."""
+        return session.run(lambda app: h.select_face_at(app, x_mm, y_mm, z_mm, append, tolerance_mm, mark))
 
     @mcp.tool()
     def hole_wizard(face_x_mm: float, face_y_mm: float, face_z_mm: float, depth_mm: float,

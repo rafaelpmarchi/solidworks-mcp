@@ -129,12 +129,14 @@ def select_circular_edge(app: Any, center_mm: list[float], diameter_mm: float,
 # -------------------------------------------------------------------- faces
 
 def select_face_at(app: Any, x_mm: float, y_mm: float, z_mm: float,
-                   append: bool = False, tolerance_mm: float = 0.1) -> dict[str, Any]:
+                   append: bool = False, tolerance_mm: float = 0.1, mark: int = 0) -> dict[str, Any]:
     """Seleciona a face do corpo que passa pelo ponto (mm).
 
     O SelectByID2 com coordenadas depende do estado da janela e devolve False
     mesmo com o ponto em cima da face; aqui a face é achada pela geometria
     (GetClosestPointOn em cada face) e selecionada pelo próprio objeto.
+    mark é a marca de seleção que a feature seguinte espera (padrão circular:
+    eixo com mark=1).
     """
     melhor, menor = None, None
     alvo = (units.from_mm(x_mm), units.from_mm(y_mm), units.from_mm(z_mm))
@@ -153,12 +155,16 @@ def select_face_at(app: Any, x_mm: float, y_mm: float, z_mm: float,
         raise ComCallError("select_face_at", (x_mm, y_mm, z_mm), None,
                            f"{achado} do ponto — confira as coordenadas (mm)")
     model = _model(_active_doc(app))
+    selmgr = cast_to(com_get(model, "SelectionManager"), "ISelectionMgr")
     if not append:
         com_call(model, "ClearSelection2", True)
-    if not com_call(cast_to(melhor, "IEntity"), "Select4", append, None):
+    dados = None
+    if mark:
+        dados = cast_to(com_call(selmgr, "CreateSelectData"), "ISelectData")
+        dados.Mark = mark
+    if not com_call(cast_to(melhor, "IEntity"), "Select4", append, dados):
         raise ComCallError("Select4", (x_mm, y_mm, z_mm), None, "face não selecionada")
-    n = com_call(cast_to(com_get(model, "SelectionManager"), "ISelectionMgr"),
-                 "GetSelectedObjectCount2", -1)
+    n = com_call(selmgr, "GetSelectedObjectCount2", -1)
     return {"selected": True, "distance_mm": round(units.to_mm(menor), 4), "selection_count": n}
 
 
@@ -364,16 +370,26 @@ def hole_wizard(
     volume_antes = _volume_mm3(app)
     esperado_mm3 = math.pi * (diameter_mm / 2.0) ** 2 * depth_mm * n_furos
 
+    avisos: list[str] = []
+
     def furo_confere() -> str | None:
-        """None se o furo saiu como pedido; senão diz o que está errado."""
+        """None se o furo saiu como pedido; senão diz o que está errado.
+
+        Volume removido MAIOR que o cilindro pedido é furo do tamanho errado.
+        MENOR é normal quando o furo cruza um vazio que já existia (galeria,
+        furo transversal) — vira aviso, não erro.
+        """
         novos = _count_cylinders(app, diameter_mm) - cilindros_antes
         if novos < n_furos:
             return f"apareceram {novos} faces Ø{diameter_mm:.2f} para {n_furos} furo(s)"
         if not through_all:
             removido = volume_antes - _volume_mm3(app)
-            if abs(removido - esperado_mm3) > esperado_mm3 * HOLE_VOLUME_TOLERANCE:
+            if removido - esperado_mm3 > esperado_mm3 * HOLE_VOLUME_TOLERANCE:
                 return (f"removeu {removido:.0f}mm³ onde Ø{diameter_mm:.2f}×{depth_mm:.2f} "
                         f"pede {esperado_mm3:.0f}mm³")
+            if esperado_mm3 - removido > esperado_mm3 * HOLE_VOLUME_TOLERANCE:
+                avisos.append(f"removeu {removido:.0f}mm³ de {esperado_mm3:.0f}mm³ esperados: "
+                              "o furo cruza um vazio que já existia")
         return None
 
     modo = "legacy"
@@ -396,6 +412,7 @@ def hole_wizard(
         if feat is not None:
             feature = cast_to(feat, "IFeature")
             _move_hole_to(app, feature, alvos_de(feature))
+            avisos.clear()
             problema = furo_confere()
             if problema is None:
                 modo = "standard"
@@ -416,6 +433,7 @@ def hole_wizard(
     nome = com_get(feature, "Name")
     alvos = alvos_de(feature)
     nome_sketch = _move_hole_to(app, feature, alvos)
+    avisos.clear()
     problema = furo_confere()
     if problema is not None:
         _delete_feature(app, feature)
@@ -440,7 +458,7 @@ def hole_wizard(
             "position_mm": alvos[0], "positions_mm": alvos,
             "holes": n_furos, "drill_diameter_mm": round(diameter_mm, 4), "mode": modo,
             "library": biblioteca, "cosmetic_thread": rosca,
-            "sketch_definition": definicao}
+            "sketch_definition": definicao, "warnings": list(avisos)}
 
 
 def _hole_mouth_center(app: Any, diameter_mm: float,

@@ -49,6 +49,19 @@ feature, sem selecionar aresta por aresta; `preview=True` só lista os cantos
 e `region_mm` limita a uma grelha. Ignora o que já está filetado. Armadilhas
 da API em [docs/decisoes/0006-cantos-de-abertura.md](docs/decisoes/0006-cantos-de-abertura.md).
 
+## Conferir e ajustar peça existente
+
+`list_dimensions` dá as cotas com nome completo (`D1@Esboço10`) e tolerância;
+`set_dimension_tolerance` aplica ajuste ISO (H7/f7), bilateral, simétrica etc.
+`check_rebuild_errors` é o painel "O que está errado?" por API; `list_faces` e
+`sketch_status` acham faces e entidades soltas por geometria. Para pôr chanfro,
+filete ou alívio DIN 509 dentro do perfil torneado: `edit_sketch` +
+`sketch_corner_chamfer` / `sketch_corner_fillet` / `sketch_undercut_din509`
+pela coordenada do canto — as linhas são encurtadas, não recriadas, e as cotas
+ficam. `set_circular_pattern_axis` e `rename_features` para o reparo e a
+arrumação. Armadilhas da API em
+[docs/decisoes/0009-conferencia-e-ajuste-de-peca.md](docs/decisoes/0009-conferencia-e-ajuste-de-peca.md).
+
 ## Testes
 
 ```powershell

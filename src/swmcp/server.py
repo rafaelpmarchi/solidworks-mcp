@@ -99,6 +99,22 @@ de folha, perfis) leem-se com get_file_locations e gravam-se com
 set_file_location/apply_kongz_library — configuração persistente, só com
 pedido explícito. sw_status esconde os perfis .sldlfp que o SolidWorks abre em
 segundo plano (só conta em library_documents_hidden).
+
+Conferir e ajustar peça existente: list_dimensions dá as cotas com NOME
+COMPLETO (D1@Esboço10 — o nome curto se repete entre esboços) e a tolerância
+de cada uma; set_dimension_tolerance aplica ajuste ISO (H7 furo / f7 eixo),
+bilateral, simétrica etc. — em cota radial de perfil de revolução passe
+show_as_diameter=True, senão o ajuste sai calculado sobre o raio.
+check_rebuild_errors é o painel "O que está errado?" por API (com
+sub-features); list_faces acha faces por geometria; sketch_status diz quais
+entidades de um esboço estão soltas. Para pôr chanfro, filete ou alívio
+DIN 509 DENTRO do perfil torneado (em vez de feature separada) abra o esboço
+com edit_sketch e use sketch_corner_chamfer / sketch_corner_fillet /
+sketch_undercut_din509 pela coordenada do canto: as linhas são encurtadas,
+não recriadas, e as cotas ficam. Editar o perfil troca a identidade das faces
+geradas por aquela linha: o que apontava para elas fica perdido —
+check_rebuild_errors mostra, set_circular_pattern_axis religa o eixo de um
+padrão; furo do assistente que perdeu a face se refaz com hole_wizard.
 """
 
 
@@ -112,6 +128,7 @@ def build_server() -> MCPServer:
         create,
         create_drawing,
         edit,
+        inspect_edit,
         mesh,
         output,
         read_drawing,
@@ -128,6 +145,7 @@ def build_server() -> MCPServer:
     review.register(mcp, session)
     create.register(mcp, session)
     edit.register(mcp, session)
+    inspect_edit.register(mcp, session)
     output.register(mcp, session)
     assembly.register(mcp, session)
     create_drawing.register(mcp, session)

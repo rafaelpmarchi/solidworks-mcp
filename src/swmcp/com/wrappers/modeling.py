@@ -695,7 +695,7 @@ def sketch_text(app: Any, x: float, y: float, text: str, height_mm: float = 5.0)
 def sketch_fillet(app: Any, radius_mm: float) -> None:
     """Arredonda o canto entre as DUAS linhas selecionadas do sketch ativo."""
     seg = com_call(_skm(app), "CreateFillet", units.from_mm(radius_mm),
-                   swconst().swConstrainedCornerAction_UseDefaultBehavior)
+                   swconst().swConstrainedCornerKeepGeometry)
     if seg is None:
         raise ComCallError("CreateFillet", (radius_mm,), None,
                            "filete de sketch não criado — duas entidades selecionadas?")

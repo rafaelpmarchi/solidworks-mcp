@@ -64,3 +64,13 @@ def test_com_get_resolve_metodo_sem_argumento():
 
     assert com_get(EarlyBound(), "RevisionNumber") == "31.5.0"
     assert com_get(EarlyBound(), "valor_simples") == 42
+
+
+def test_comcallerror_chega_ao_modelo_como_toolerror():
+    """Sem herdar de ToolError o framework MCP esconde o motivo ("Error executing tool X")."""
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    err = ComCallError("hole_wizard", (12.0,), None, "o furo saiu diferente do pedido")
+    assert isinstance(err, ToolError)
+    assert isinstance(err, RuntimeError)
+    assert "o furo saiu diferente do pedido" in str(err)
