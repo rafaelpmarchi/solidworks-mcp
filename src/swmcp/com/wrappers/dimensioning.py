@@ -183,6 +183,16 @@ def fully_dimension_profile(app: Any, sketch_name: str = "",
             sketch = _active_sketch(app)
         segmentos = _segments(sketch)
         _centerline(app)  # falha cedo se não houver eixo
+        # A cotagem diametral daqui supõe o eixo em X passando por y=0. Perfil com
+        # eixo vertical (peça com Z = eixo, esboço no Plano superior) ou fora da
+        # origem saía com dezenas de cotas "diâmetro" absurdas (Ø666 num bloco de
+        # 250) e sub-definido — medido no 3-50200-92000. Recusa antes de mexer:
+        # quem chama cai no fully_define_sketch geral, que resolve esse caso.
+        eixo = next(s for s in segmentos if s["construcao"])
+        if not eixo["horizontal"] or abs(eixo["a"][1]) > TOL_MM:
+            raise ComCallError("fully_dimension_profile", (eixo["a"], eixo["b"]), None,
+                               "perfil fora da convenção desta cotagem (linha de centro horizontal "
+                               "em y=0) — use fully_define_sketch")
 
         # 1) relações: o que é horizontal/vertical no desenho passa a ser por relação.
         #    A lista é refeita a cada volta porque cada relação recria as entidades.

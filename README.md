@@ -62,6 +62,20 @@ ficam. `set_circular_pattern_axis` e `rename_features` para o reparo e a
 arrumação. Armadilhas da API em
 [docs/decisoes/0009-conferencia-e-ajuste-de-peca.md](docs/decisoes/0009-conferencia-e-ajuste-de-peca.md).
 
+## Bloco hidráulico e desenho de cliente em PDF
+
+`port_hole` faz o pórtico G inteiro (rebaixo d2×a, broca da rosca, canal) numa
+feature, começando fora da face — rebaixo que invade ressalto corta o ressalto;
+`angled_channel` fura inclinado dentro de um plano de vista (`target_mm`);
+`sketch_on_face` e `batch_holes` trabalham em coordenadas da peça. Depois de cada
+lote, `validate_model` (reconstrução, esboços, corpos, massa do carimbo).
+`dump_holes` lê a furação de uma peça de referência, `organize_tree` monta as
+pastas por face, `copy_properties_from` traz material/propriedades e `view_face`
+fotografa normal a uma face. `run_sw_script(scratch=True)` testa API numa peça
+descartável. Para o PDF do cliente: `pdf_drawing_crop` (vista em PNG + mm por
+pixel) e `pdf_compare_table` (comparativo de dois desenhos por cota). Decisões
+em [docs/decisoes/0010-bloco-hidraulico-e-validacao.md](docs/decisoes/0010-bloco-hidraulico-e-validacao.md).
+
 ## Testes
 
 ```powershell

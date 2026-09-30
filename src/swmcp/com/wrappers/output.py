@@ -83,3 +83,49 @@ def screenshot(app: Any, path: str) -> dict[str, Any]:
     model = _model(_active_doc(app))
     com_call(model, "ViewZoomtofit2")
     return save_as(app, path, overwrite=True)
+
+
+# swStandardViews_e: de que lado a câmera olha (normal PARA FORA da face → vista)
+_VIEW_BY_NORMAL = {(0, 0, 1): 1, (0, 0, -1): 2, (-1, 0, 0): 3, (1, 0, 0): 4,
+                   (0, 1, 0): 5, (0, -1, 0): 6}
+
+
+def view_face(app: Any, normal: list[float], path: str, box_mm: list[float] | None = None,
+              hide_planes: bool = True) -> dict[str, Any]:
+    """Screenshot olhando de frente para a face de normal (para fora) dada.
+
+    normal: eixo da peça, ex. [0,-1,0] = face -Y. box_mm [x1,y1,z1,x2,y2,z2]
+    dá zoom na região (sem ela, zoom to fit). hide_planes esconde os planos
+    de referência visíveis — que no iso poluem a imagem.
+    """
+    chave = tuple(int(round(c)) for c in normal)
+    if chave not in _VIEW_BY_NORMAL or sum(abs(c) for c in chave) != 1:
+        raise ComCallError("view_face", tuple(normal), None,
+                           "normal precisa ser um eixo da peça: [±1,0,0], [0,±1,0] ou [0,0,±1]")
+    model = _model(_active_doc(app))
+    escondidos = []
+    if hide_planes:
+        raw = com_call(model, "FirstFeature")
+        vistos = 0
+        while raw is not None:
+            feat = cast_to(raw, "IFeature")
+            if com_call(feat, "GetTypeName2") == "RefPlane":
+                vistos += 1
+                if vistos > 3 and com_get(feat, "Visible") == 1:  # swVisibilityStateShown
+                    com_call(model, "ClearSelection2", True)
+                    com_call(feat, "Select2", False, 0)
+                    com_call(model, "BlankRefGeom")
+                    escondidos.append(com_call(feat, "Name"))
+            raw = com_call(feat, "GetNextFeature")
+        com_call(model, "ClearSelection2", True)
+    com_call(model, "ShowNamedView2", "", _VIEW_BY_NORMAL[chave])
+    if box_mm:
+        b = [float(v) / 1000.0 for v in box_mm]
+        com_call(model, "ViewZoomTo2", *b)
+    else:
+        com_call(model, "ViewZoomtofit2")
+    if not path.lower().endswith(".png"):
+        path += ".png"
+    r = save_as(app, path, overwrite=True)
+    r["hidden_planes"] = escondidos
+    return r

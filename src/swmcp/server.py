@@ -115,6 +115,41 @@ não recriadas, e as cotas ficam. Editar o perfil troca a identidade das faces
 geradas por aquela linha: o que apontava para elas fica perdido —
 check_rebuild_errors mostra, set_circular_pattern_axis religa o eixo de um
 padrão; furo do assistente que perdeu a face se refaz com hole_wizard.
+
+Bloco hidráulico (aprendido no 3-50200-92000): port_hole faz o pórtico G
+inteiro numa feature (rebaixo d2×a + broca da rosca + canal), começando FORA
+da face — o rebaixo que invade um ressalto de interface corta o ressalto; o
+assistente não serve para isso porque o rebaixo customizado sai em polegada.
+angled_channel fura inclinado (canal Ø7 de NG6 a 10°/12,5°) apontando o
+destino com target_mm; canal que termina EXATAMENTE na parede de outro furo dá
+erro de reconstrução (swFeatureError 51) — passe 1-2 mm. sketch_on_face e
+batch_holes trabalham em coordenadas da PEÇA; o lote desliga o redesenho.
+Depois de cada lote rode validate_model (reconstrução + esboços + massa do
+carimbo) — nunca siga com feature em erro, e massa só vale com a árvore limpa.
+dump_holes lê a furação de uma peça de referência para copiar o padrão;
+organize_tree monta as pastas por face conferindo a ordem real da árvore;
+copy_properties_from traz material/propriedades da referência; view_face tira
+a foto normal a uma face (o iso deita peça com Z de eixo). Para testar uma
+chamada de API duvidosa use run_sw_script(scratch=True) — nunca crie e apague
+feature de teste na peça que o usuário está vendo.
+
+Editar perfil torneado (aprendido no U1 do 3-50200-92000): sketch_relief_groove
+faz o canal de alívio U1 (raio no pé, fundo, entrada em arco) no canto parede ×
+ressalto; remove_sketch_chamfer/move_sketch_chamfer tiram ou mudam chanfro de
+canto com as pontas exatas; sketch_arc sai sempre com o arco CURTO (o
+CreateArc às vezes dá o maior). Antes e depois de mexer no perfil chame
+profile_volume: a variação do corpo tem que bater com a do perfil. Esboço que
+acumulou cotas de várias tentativas (validate_model avisa) se conserta com
+sketch_redefine — apaga tudo e cota uma vez; não empilhe cotas por cima.
+fillet_circular_edges, set_hole_depth e replace_hole_with_channel ajustam a
+furação sem script.
+
+Desenho de cliente em PDF: pdf_drawing_crop renderiza cada vista em 200-300
+dpi (a folha inteira sai ilegível; extração vetorial de PDF Creo não serve) e
+com view_scale dá mm por pixel para medir o que não está cotado. Desenho
+Siemens é 1º diedro (ISO E): a vista posta à DIREITA é a vista pela esquerda.
+Notação de rosca M16-30/38 = rosca 30 / broca 38. pdf_compare_table monta a
+tabela comparativa de dois desenhos com recorte por cota.
 """
 
 
@@ -129,8 +164,10 @@ def build_server() -> MCPServer:
         create_drawing,
         edit,
         inspect_edit,
+        machining,
         mesh,
         output,
+        pdf,
         read_drawing,
         read_model,
         review,
@@ -146,6 +183,8 @@ def build_server() -> MCPServer:
     create.register(mcp, session)
     edit.register(mcp, session)
     inspect_edit.register(mcp, session)
+    machining.register(mcp, session)
+    pdf.register(mcp, session)
     output.register(mcp, session)
     assembly.register(mcp, session)
     create_drawing.register(mcp, session)

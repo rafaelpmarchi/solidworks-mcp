@@ -215,6 +215,11 @@ def _volume_mm3(app: Any) -> float:
     return com_call(body, "GetMassProperties", 7850.0)[3] * 1e9
 
 
+# (norma, tipo) em que o assistente já ignorou o tamanho nesta sessão: o SW2023
+# faz isso sempre para Ansi Metric, e tentar de novo custa uma feature criada e
+# apagada por furo (~15 s cada). Depois da 1ª vez vai direto pelo legado.
+_STANDARD_PATH_IGNORED: set[tuple[str, str]] = set()
+
 # quanto o volume removido pode fugir do cilindro teórico (ponta da broca, chanfro)
 HOLE_VOLUME_TOLERANCE = 0.05
 
@@ -394,7 +399,10 @@ def hole_wizard(
 
     modo = "legacy"
     feat = None
-    if biblioteca:
+    chave_norma = (standard, biblioteca["hole_type"]) if biblioteca else None
+    if biblioteca and chave_norma in _STANDARD_PATH_IGNORED:
+        log.info("pulando o caminho pela norma %s/%s: já ignorado nesta sessão", *chave_norma)
+    if biblioteca and chave_norma not in _STANDARD_PATH_IGNORED:
         select_face_at(app, face_x_mm, face_y_mm, face_z_mm)
         feat = com_call(
             fm, "HoleWizard5",
@@ -420,6 +428,7 @@ def hole_wizard(
                 log.warning("o assistente ignorou o tamanho %s da norma %s (%s); "
                             "refazendo no modo legado com as dimensões da biblioteca",
                             biblioteca["size"], standard, problema)
+                _STANDARD_PATH_IGNORED.add(chave_norma)
                 _delete_feature(app, feature)
                 feat = None
     if feat is None:

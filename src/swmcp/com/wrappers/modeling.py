@@ -241,15 +241,34 @@ def sketch_rectangle(app: Any, x1: float, y1: float, x2: float, y2: float, cente
 
 
 def sketch_arc_center(app: Any, xc: float, yc: float, x1: float, y1: float, x2: float, y2: float,
-                      direction: int = 1) -> None:
-    """Arco por centro + início + fim. direction: 1 anti-horário, -1 horário."""
+                      direction: int = 1, short_arc: bool = True) -> dict[str, Any]:
+    """Arco por centro + início + fim. direction: 1 anti-horário, -1 horário.
+
+    short_arc (padrão): o arco tem que ser o CURTO entre as pontas — o
+    CreateArc às vezes sai com o maior (medido no SW2023: o sentido depende
+    da orientação do esboço), e isso passa despercebido até a massa mudar
+    +10 000 mm³. O comprimento é conferido e o arco refeito no outro sentido.
+    """
+    import math
+
+    raio = math.hypot(x1 - xc, y1 - yc)
+    tentativas = (direction, -direction) if short_arc else (direction,)
     with precise_sketching(app):
-        seg = com_call(_skm(app), "CreateArc",
-                       units.from_mm(xc), units.from_mm(yc), 0.0,
-                       units.from_mm(x1), units.from_mm(y1), 0.0,
-                       units.from_mm(x2), units.from_mm(y2), 0.0, direction)
-    if seg is None:
-        raise ComCallError("CreateArc", (xc, yc), None, "arco não criado")
+        for sentido in tentativas:
+            seg = com_call(_skm(app), "CreateArc",
+                           units.from_mm(xc), units.from_mm(yc), 0.0,
+                           units.from_mm(x1), units.from_mm(y1), 0.0,
+                           units.from_mm(x2), units.from_mm(y2), 0.0, sentido)
+            if seg is None:
+                raise ComCallError("CreateArc", (xc, yc), None, "arco não criado")
+            comprimento = units.to_mm(com_call(cast_to(seg, "ISketchSegment"), "GetLength"))
+            if not short_arc or comprimento <= math.pi * raio + 1e-3:
+                return {"length_mm": round(comprimento, 4), "direction": sentido}
+            model = _model(_active_doc(app))
+            com_call(model, "ClearSelection2", True)
+            com_call(seg, "Select4", False, None)
+            com_call(model, "EditDelete")
+    raise ComCallError("CreateArc", (xc, yc), None, "o arco curto não saiu em nenhum sentido")
 
 
 def sketch_polyline(app: Any, points_mm: list[list[float]], close: bool = False,

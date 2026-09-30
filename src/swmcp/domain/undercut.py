@@ -72,3 +72,56 @@ def din509_e(corner: Point, along: Point, into_material: Point, radius: float, d
         arc_center=p(radius, depth - radius),
         width=f,
     )
+
+
+# ------------------------------------------------ canal de alívio "U1" (Siemens)
+
+@dataclass(frozen=True)
+class ReliefGroove:
+    """Canal de alívio no pé de um furo (detalhe U1 do 3-50200-92000).
+
+    Sobe da face do ressalto (degrau) pela parede: raio R tangente ao ressalto
+    e ao fundo, fundo reto a 'depth' dentro da parede, e a ENTRADA em arco de
+    mesmo raio, tangente ao fundo e cortando a parede a 'height' do ressalto
+    (sem degrau). Ex.: Ø200,8 × 4 com R1,6 no Ø200 H9.
+    """
+
+    shoulder: Point        # onde o raio de pé encontra o ressalto
+    floor_start: Point     # fim do raio de pé / início do fundo
+    floor_end: Point       # fim do fundo / início do arco de entrada
+    wall: Point            # onde o arco de entrada encontra a parede
+    foot_center: Point
+    entry_center: Point
+    radius: float
+
+
+def relief_groove(corner: Point, along: Point, into_material: Point, depth: float,
+                  height: float, radius: float) -> ReliefGroove:
+    """Pontos do canal no canto parede × ressalto.
+
+    along: versor ao longo da parede saindo do canto; into_material: versor
+    perpendicular para dentro do material (para fora do furo). Levanta
+    ValueError para combinação impossível.
+    """
+    if not 0 < depth < radius:
+        raise ValueError("a profundidade precisa ser positiva e menor que o raio")
+    if abs(along[0] * into_material[0] + along[1] * into_material[1]) > 1e-6:
+        raise ValueError("os versores precisam ser perpendiculares")
+    dz = math.sqrt(radius * radius - (radius - depth) ** 2)
+    if height - dz <= radius:
+        raise ValueError(f"altura pequena demais: precisa de mais que {radius + dz:.3f} "
+                         f"para R{radius} × {depth}")
+    u, n = along, into_material
+
+    def p(su: float, sn: float) -> Point:
+        return corner[0] + u[0] * su + n[0] * sn, corner[1] + u[1] * su + n[1] * sn
+
+    return ReliefGroove(
+        shoulder=p(0.0, depth - radius),
+        floor_start=p(radius, depth),
+        floor_end=p(height - dz, depth),
+        wall=p(height, 0.0),
+        foot_center=p(radius, depth - radius),
+        entry_center=p(height - dz, depth - radius),
+        radius=radius,
+    )

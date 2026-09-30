@@ -11,6 +11,7 @@ from mcp.server.mcpserver import MCPServer
 from swmcp.com.session import SwSession
 from swmcp.com.wrappers import dimensions as d
 from swmcp.com.wrappers import inspect as i
+from swmcp.com.wrappers import profile_edit as pe
 from swmcp.com.wrappers import repair as r
 from swmcp.com.wrappers import sketch_edit as se
 
@@ -109,6 +110,57 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         Reabra o esboço com edit_sketch e feche com close_sketch depois."""
         return session.run(lambda app: se.sketch_undercut_din509(
             app, corner_mm, radius_mm, depth_mm, width_mm, ramp_angle_deg))
+
+    @mcp.tool()
+    def sketch_relief_groove(corner_mm: list[float], depth_mm: float, height_mm: float,
+                             radius_mm: float) -> dict[str, Any]:
+        """Canal de alívio tipo U1 (Siemens) no canto parede × ressalto de um
+        perfil de revolução ABERTO para edição: raio radius_mm tangente ao
+        ressalto e ao fundo, fundo a depth_mm dentro da parede e ENTRADA em
+        arco do mesmo raio, tangente ao fundo, cortando a parede a height_mm do
+        ressalto (sem degrau). Ex.: U1 do 3-50200-92000 = depth 0,4, height 4,
+        R1,6 no canto do Ø200 H9. As linhas do canto são encurtadas, os arcos
+        saem pelo lado CURTO (conferidos) e o canal sai cotado. Depois:
+        close_sketch e profile_volume para conferir o volume."""
+        return session.run(lambda app: pe.sketch_relief_groove(
+            app, corner_mm, depth_mm, height_mm, radius_mm))
+
+    @mcp.tool()
+    def sketch_redefine(sketch_name: str = "") -> dict[str, Any]:
+        """Recota um esboço DO ZERO: apaga todas as cotas e relações, põe só as
+        de forma (horizontal/vertical, tangência onde a geometria é tangente
+        de fato, linha de centro na origem) e cota uma vez até ficar preto. É o
+        remédio para esboço que acumulou cotas de várias tentativas e ficou
+        sub/sobredefinido sem explicação (validate_model avisa). A geometria
+        não muda. Sem sketch_name trabalha no esboço aberto."""
+        return session.run(lambda app: pe.sketch_redefine(app, sketch_name))
+
+    @mcp.tool()
+    def remove_sketch_chamfer(from_mm: list[float], to_mm: list[float]) -> dict[str, Any]:
+        """Tira o chanfro de canto (a linha de from_mm a to_mm) do esboço ABERTO
+        e devolve o canto vivo, prolongando as duas linhas vizinhas. Se as
+        cotas prenderem as pontas, o esboço é recotado do zero (o retorno
+        diz 'redefined')."""
+        return session.run(lambda app: pe.remove_sketch_chamfer(app, from_mm, to_mm))
+
+    @mcp.tool()
+    def move_sketch_chamfer(from_mm: list[float], to_mm: list[float], new_corner_mm: list[float],
+                            new_from_mm: list[float], new_to_mm: list[float]) -> dict[str, Any]:
+        """Tira o chanfro from→to e põe outro no canto new_corner_mm com as
+        pontas EXATAS new_from_mm/new_to_mm (como o desenho cota: 20° × 2,5 =
+        2,5 axial e 0,91 radial) — confere e troca as distâncias se o
+        SolidWorks as aplicar ao contrário. Esboço aberto."""
+        return session.run(lambda app: pe.move_sketch_chamfer(
+            app, from_mm, to_mm, new_corner_mm, new_from_mm, new_to_mm))
+
+    @mcp.tool()
+    def profile_volume(sketch_name: str) -> dict[str, Any]:
+        """Volume TEÓRICO do sólido de revolução do perfil (Pappus, com arcos),
+        o volume atual do corpo e os arcos que saíram maiores que meia volta.
+        Chame antes e depois de editar o perfil: a variação do corpo tem que
+        bater com a do perfil — foi o que pegou o arco do U1 saindo pelo lado
+        errado (+10 000 mm³ onde o perfil dava +816). Somente-leitura."""
+        return session.run(lambda app: pe.profile_volume(app, sketch_name))
 
     # ------------------------------------------------------------ reparo
     @mcp.tool()

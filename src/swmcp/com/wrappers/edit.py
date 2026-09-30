@@ -172,3 +172,51 @@ def list_features(app: Any, limit: int = 100) -> list[dict[str, Any]]:
         })
         raw = com_call(feat, "GetNextFeature")
     return out
+
+
+def copy_properties_from(app: Any, source_path: str, include_material: bool = True,
+                         overwrite: bool = False) -> dict[str, Any]:
+    """Copia material e propriedades customizadas (documento e configuração
+    ativa) de uma peça de referência para o documento ativo.
+
+    A referência abre somente-leitura e é fechada no fim se não estava aberta.
+    overwrite=False mantém o valor que o documento ativo já tiver.
+    """
+    import os
+
+    from swmcp.com.wrappers import document
+    from swmcp.com.wrappers.drawing import read_custom_properties
+
+    alvo = _model(_active_doc(app))
+    titulo_alvo = com_call(alvo, "GetTitle")
+    ja_aberto = document.find_open_document(app, os.path.abspath(source_path)) is not None
+    fonte_info = document.open_document(app, source_path, read_only=True)
+    try:
+        fonte = _model(_active_doc(app))
+        cfg_fonte = com_call(fonte, "GetActiveConfiguration")
+        nome_cfg_fonte = com_get(cast_to(cfg_fonte, "IConfiguration"), "Name") if cfg_fonte else ""
+        props_doc = read_custom_properties(fonte, "")
+        props_cfg = read_custom_properties(fonte, nome_cfg_fonte) if nome_cfg_fonte else {}
+        material = None
+        if include_material and com_call(fonte, "GetType") == swconst().swDocPART:
+            raw = com_call(cast_to(fonte, "IPartDoc"), "GetMaterialPropertyName2", nome_cfg_fonte, "")
+            material = (raw[0] if isinstance(raw, tuple) else raw) or None
+    finally:
+        if not ja_aberto:
+            document.close_document(app, fonte_info["title"])
+        document.activate_document(app, titulo_alvo)
+    cfg_alvo = com_call(alvo, "GetActiveConfiguration")
+    nome_cfg_alvo = com_get(cast_to(cfg_alvo, "IConfiguration"), "Name") if cfg_alvo else ""
+    existentes = {"": read_custom_properties(alvo, ""),
+                  nome_cfg_alvo: read_custom_properties(alvo, nome_cfg_alvo) if nome_cfg_alvo else {}}
+    copiadas, mantidas = [], []
+    for cfg, props in (("", props_doc), (nome_cfg_alvo, props_cfg)):
+        for nome, valor in props.items():
+            if not overwrite and existentes.get(cfg, {}).get(nome):
+                mantidas.append(nome)
+                continue
+            set_custom_property(app, nome, valor, cfg)
+            copiadas.append({"name": nome, "value": valor, "configuration": cfg or "(documento)"})
+    aplicado = set_material(app, material)["material"] if material else None
+    return {"source": fonte_info["path"], "copied": copiadas, "kept": mantidas,
+            "material": aplicado}

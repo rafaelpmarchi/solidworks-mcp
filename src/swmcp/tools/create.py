@@ -28,7 +28,13 @@ def _define_active(app: Any, revolution: bool = False) -> dict[str, Any] | None:
                 return dm.fully_dimension_profile(app)
             except Exception:  # noqa: BLE001 — perfil fora da convenção de eixo em X: vai pelo geral
                 pass
-        return sd.fully_define_sketch(app)
+        resultado = sd.fully_define_sketch(app)
+        if revolution and not resultado.get("fully_defined"):
+            # perfil de eixo vertical/fora da origem: a cotagem geral às vezes não
+            # fecha; recotar do zero com as relações de forma resolve (ADR 0010)
+            from swmcp.com.wrappers import profile_edit as pe
+            resultado = pe.sketch_redefine(app)
+        return resultado
     except Exception as exc:  # noqa: BLE001 — cotar é auxiliar; a feature segue
         return {"fully_defined": False, "error": str(exc)}
 
@@ -82,10 +88,11 @@ def register(mcp: MCPServer, session: SwSession) -> None:
     @mcp.tool()
     def sketch_arc(xc: float, yc: float, x1: float, y1: float, x2: float, y2: float,
                    clockwise: bool = False) -> dict[str, bool]:
-        """Arco por centro (xc,yc), ponto inicial e final (mm)."""
-        session.run(lambda app: m.sketch_arc_center(app, xc, yc, x1, y1, x2, y2,
-                                                    -1 if clockwise else 1))
-        return {"ok": True}
+        """Arco por centro (xc,yc), ponto inicial e final (mm). Sai sempre o
+        arco CURTO entre as pontas (conferido pelo comprimento — o CreateArc
+        às vezes dá o maior); o retorno traz o comprimento."""
+        return session.run(lambda app: m.sketch_arc_center(app, xc, yc, x1, y1, x2, y2,
+                                                           -1 if clockwise else 1))
 
     @mcp.tool()
     def sketch_polygon(xc: float, yc: float, sides: int, diameter: float) -> dict[str, bool]:

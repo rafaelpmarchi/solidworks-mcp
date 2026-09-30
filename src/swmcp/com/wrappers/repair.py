@@ -67,3 +67,80 @@ def rename_features(app: Any, names: dict[str, str]) -> dict[str, Any]:
                                f"{exc.detail}; já renomeadas: {feitas}") from exc
         feitas.append([antigo, novo])
     return {"renamed": feitas, "count": len(feitas)}
+
+
+# ------------------------------------------------------- pastas por face
+
+FOLDER_CONTAINING = 2   # swFeatureTreeFolder_Containing
+MOVE_AFTER = 3          # swMoveLocation_e: depois da feature de referência
+
+
+def _tree_order(model: Any) -> list[str]:
+    nomes = []
+    raw = com_call(model, "FirstFeature")
+    while raw is not None:
+        feat = cast_to(raw, "IFeature")
+        nomes.append(com_call(feat, "Name"))
+        raw = com_call(feat, "GetNextFeature")
+    return nomes
+
+
+def organize_tree(app: Any, groups: list[dict[str, Any]], renames: dict[str, str] | None = None,
+                  after: str = "") -> dict[str, Any]:
+    """Renomeia, reordena e agrupa em pastas: [{name, features:[...]}, ...].
+
+    As features vão para a sequência dos grupos a partir de 'after' (padrão:
+    logo antes da primeira feature dos grupos na árvore atual) e cada grupo
+    vira uma pasta. ReorderFeature devolve False mesmo movendo, por isso a
+    ordem é conferida lendo a árvore; se não bater, nenhuma pasta é criada e o
+    retorno diz onde divergiu. Pasta só junta feature contígua — é por isso
+    que a reordenação vem antes.
+    """
+    from swmcp.domain.tree import desired_sequence, order_mismatches
+
+    model = _model(_active_doc(app))
+    renomeadas = rename_features(app, renames)["renamed"] if renames else []
+    ordem = _tree_order(model)
+    pedidas = {f for g in groups for f in g["features"]}
+    # port_hole/angled_channel criam "Plano <feature>" logo antes da feature: o
+    # plano vai junto para a pasta, senão ela deixa de ser contígua
+    grupos = [(g["name"], [x for f in g["features"]
+                           for x in ([f"Plano {f}"] if f"Plano {f}" in ordem
+                                     and f"Plano {f}" not in pedidas else []) + [f]])
+              for g in groups]
+    sequencia = desired_sequence(grupos)
+    faltando = [f for f in sequencia if f not in ordem]
+    if faltando:
+        raise ComCallError("organize_tree", tuple(faltando[:5]), None,
+                           f"features não existem na árvore: {faltando[:10]}")
+    anterior = after
+    if not anterior:
+        primeira = min(ordem.index(f) for f in sequencia)
+        anterior = ordem[primeira - 1] if primeira > 0 else ""
+    ext = com_get(model, "Extension")
+    for nome in sequencia:
+        if anterior:
+            com_call(ext, "ReorderFeature", nome, anterior, MOVE_AFTER)
+        anterior = nome
+    com_call(model, "ForceRebuild3", False)
+    divergencias = order_mismatches(_tree_order(model), sequencia)
+    if divergencias:
+        return {"renamed": renomeadas, "folders": [], "ok": False,
+                "mismatches": divergencias[:10],
+                "note": "a reordenação não ficou como pedido (dependência entre features?) — "
+                        "nenhuma pasta foi criada"}
+    fm = com_get(model, "FeatureManager")
+    pastas = []
+    for nome_grupo, features in grupos:
+        com_call(model, "ClearSelection2", True)
+        for i, f in enumerate(features):
+            com_call(_feature_by_name(model, f), "Select2", i > 0, 0)
+        pasta = com_call(fm, "InsertFeatureTreeFolder2", FOLDER_CONTAINING)
+        if pasta is None:
+            pastas.append({"name": nome_grupo, "ok": False})
+            continue
+        cast_to(pasta, "IFeature").Name = nome_grupo
+        pastas.append({"name": nome_grupo, "ok": True, "features": len(features)})
+    com_call(model, "ClearSelection2", True)
+    return {"renamed": renomeadas, "folders": pastas, "ok": all(p["ok"] for p in pastas),
+            "mismatches": []}
