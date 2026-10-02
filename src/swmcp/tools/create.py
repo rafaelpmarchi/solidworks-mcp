@@ -23,15 +23,19 @@ def _define_active(app: Any, revolution: bool = False) -> dict[str, Any] | None:
     volta com fully_defined=False para quem chamou decidir o que fazer.
     """
     try:
+        resultado = None
         if revolution:
             try:
-                return dm.fully_dimension_profile(app)
+                resultado = dm.fully_dimension_profile(app)
             except Exception:  # noqa: BLE001 — perfil fora da convenção de eixo em X: vai pelo geral
                 pass
-        resultado = sd.fully_define_sketch(app)
+        if resultado is None:
+            resultado = sd.fully_define_sketch(app)
         if revolution and not resultado.get("fully_defined"):
-            # perfil de eixo vertical/fora da origem: a cotagem geral às vezes não
-            # fecha; recotar do zero com as relações de forma resolve (ADR 0010)
+            # A cotagem de perfil devolvia o esboço azul sem cair aqui (roda de
+            # polo 10006900433: chanfro + linha de centro fora da origem, 15
+            # cotas e sub-definido). Recotar do zero com as relações de forma
+            # resolve (ADR 0010) — e limpa o que as tentativas acumularam.
             from swmcp.com.wrappers import profile_edit as pe
             resultado = pe.sketch_redefine(app)
         return resultado

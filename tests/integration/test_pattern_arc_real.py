@@ -11,8 +11,10 @@ import pytest
 
 from swmcp.com.invoke import com_call, com_get
 from swmcp.com.session import SwSession
+from swmcp.com.wrappers import inspect as i
 from swmcp.com.wrappers import modeling as m
 from swmcp.com.wrappers import output as o
+from swmcp.tools.create import _define_active
 
 pytestmark = pytest.mark.integration
 
@@ -81,3 +83,22 @@ def test_padrao_circular_acusa_instancias_faltando(session, disco):
         axis_edge_center_mm=[0, 0, 0], axis_edge_diameter_mm=60))
     assert r["ok"] is False
     assert "warning" in r
+
+
+def test_revolve_deixa_perfil_com_chanfro_preto_de_primeira(session):
+    # perfil da roda com chanfro no furo e linha de centro começando ANTES da
+    # origem: a cotagem de perfil devolvia sub-definido e a revolve aceitava
+    session.run(lambda app: o.new_document(app, "part"))
+    titulo = session.run(lambda app: com_call(com_get(app, "ActiveDoc"), "GetTitle"))
+    try:
+        nome = session.run(lambda app: m.insert_sketch(app, "Plano frontal"))
+        session.run(lambda app: m.sketch_polyline(
+            app, [[0, 30], [0, 112.5], [20, 112.5], [20, 50], [35, 50], [35, 32.5], [32.5, 30]],
+            close=True))
+        session.run(lambda app: m.sketch_line(app, -5, 0, 40, 0, centerline=True))
+        definicao = session.run(lambda app: _define_active(app, revolution=True))
+        assert definicao["fully_defined"], definicao
+        session.run(lambda app: m.revolve(app, 360.0))
+        assert session.run(lambda app: i.sketch_status(app, nome))["fully_defined"]
+    finally:
+        session.run(lambda app: com_call(app, "CloseDoc", titulo))
