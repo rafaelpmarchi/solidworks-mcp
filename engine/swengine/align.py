@@ -75,6 +75,20 @@ def apply_alignment(mesh: trimesh.Trimesh, matrix: np.ndarray) -> trimesh.Trimes
     return out
 
 
+def align_axis(mesh: trimesh.Trimesh, region: dict | None = None,
+               axis_hint: list | None = None,
+               z_origin: str = "centroid") -> tuple[np.ndarray, dict]:
+    """Peça de revolução: eixo real (pela geometria das normais) → Z, ponto
+    do eixo → origem. O PCA erra o centro quando a peça não é cheia (furos,
+    orelhas, scan de um lado só) — no disco de freio foram 3,6 mm."""
+    from .revolution import axis_alignment_matrix, fit_axis
+
+    info = fit_axis(mesh, region, axis_hint)
+    axial = mesh.vertices @ np.asarray(info["axis_dir"], float)
+    m = axis_alignment_matrix(info["axis_point"], info["axis_dir"], axial, z_origin)
+    return m, info
+
+
 def align(mesh: trimesh.Trimesh, mode: str, region: dict | None = None,
           matrix: list | None = None) -> tuple[trimesh.Trimesh, np.ndarray]:
     if mode == "pca":

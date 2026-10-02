@@ -83,6 +83,15 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         return {"ok": True}
 
     @mcp.tool()
+    def sketch_circles(circles: list, center_x: float = 0.0,
+                       center_y: float = 0.0) -> dict[str, Any]:
+        """Vários círculos no sketch ativo de uma vez (mm), cada Ø conferido.
+        Item: [x, y, Ø] ou {"x", "y", "d"} ou POLAR {"r", "angle_deg", "d"}
+        em torno de (center_x, center_y) — furação: r = PCD/2. Bem mais
+        rápido que sketch_circle um a um (30 furos)."""
+        return session.run(lambda app: m.sketch_circles(app, circles, (center_x, center_y)))
+
+    @mcp.tool()
     def sketch_rectangle(x1: float, y1: float, x2: float, y2: float, center: bool = False) -> dict[str, bool]:
         """Retângulo no sketch ativo (mm). center=False: cantos opostos;
         center=True: (x1,y1) é o centro e (x2,y2) um canto."""
@@ -130,12 +139,16 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         usa para cortar para o outro lado. flip é outra coisa: inverte qual lado
         do perfil vira material (num corte, flip=True tira tudo MENOS o perfil).
         Fecha o sketch. fully_define (padrão) cota o esboço até ficar
-        totalmente definido ANTES de extrudar; o retorno traz sketch_definition."""
+        totalmente definido ANTES de extrudar; o retorno traz sketch_definition.
+        No CORTE o sentido padrão é CONTRA a normal do plano (entra na face do
+        esboço) — o oposto do ressalto. Corte recusado (nada a cortar do lado
+        pedido) é refeito sozinho para o outro lado; reverse_direction_used
+        diz qual valeu e 'aviso' aparece quando trocou."""
         def run(app):
             definicao = _define_active(app) if fully_define else None
-            nome = m.extrude(app, depth_mm, cut, flip, through_all, both_directions,
-                             reverse_direction)
-            return {"feature": nome, "sketch_definition": definicao}
+            r = m.extrude_detail(app, depth_mm, cut, flip, through_all, both_directions,
+                                 reverse_direction)
+            return {**r, "sketch_definition": definicao}
         return session.run(run)
 
     @mcp.tool()

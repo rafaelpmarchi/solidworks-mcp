@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from typing import Any
 
 from swmcp.com.invoke import ComCallError, com_call, com_get
@@ -53,11 +55,80 @@ def save_active(app: Any) -> dict[str, Any]:
     return {"saved": path, "warnings": warnings}
 
 
+@contextmanager
+def _stl_export_prefs(app: Any) -> Iterator[None]:
+    """STL nas coordenadas DA PEÇA, em mm e com qualidade fina.
+
+    O padrão do SolidWorks translada a malha para o octante positivo (medido
+    no SW2023: o disco de Ø181 saiu de x=0 a 181) — para comparar com scan
+    isso é um deslocamento silencioso de ~90 mm. A qualidade grosseira dava
+    0,1 mm de corda no cone. As preferências voltam ao que eram."""
+    c = swconst()
+    toggles = {c.swSTLDontTranslateToPositive: True, c.swSTLBinaryFormat: True}
+    ints = {c.swExportStlUnits: c.swMM, c.swSTLQuality: c.swSTLQuality_Fine}
+    antes_t = {k: com_call(app, "GetUserPreferenceToggle", k) for k in toggles}
+    antes_i = {k: com_call(app, "GetUserPreferenceIntegerValue", k) for k in ints}
+    try:
+        for k, v in toggles.items():
+            com_call(app, "SetUserPreferenceToggle", k, v)
+        for k, v in ints.items():
+            com_call(app, "SetUserPreferenceIntegerValue", k, v)
+        yield
+    finally:
+        for k, v in antes_t.items():
+            try:
+                com_call(app, "SetUserPreferenceToggle", k, v)
+            except ComCallError:
+                log.exception("não consegui restaurar a preferência STL %s", k)
+        for k, v in antes_i.items():
+            try:
+                com_call(app, "SetUserPreferenceIntegerValue", k, v)
+            except ComCallError:
+                log.exception("não consegui restaurar a preferência STL %s", k)
+
+
+def export_stl(app: Any, path: str, bodies: list[str] | None = None,
+               overwrite: bool = False) -> dict[str, Any]:
+    """STL do documento ativo nas coordenadas da peça (mm). bodies limita aos
+    corpos com esses nomes: os outros visíveis (a malha do scan, o sólido
+    auxiliar) ficam ocultos durante a exportação e voltam depois — o STL só
+    leva corpo visível."""
+    from swmcp.com.wrappers import bodies as b
+
+    ocultados: list[Any] = []
+    mostrados: list[Any] = []
+    if bodies:
+        nomes = {x["name"] for x in b.list_bodies(app)}
+        faltando = [n for n in bodies if n not in nomes]
+        if faltando:
+            raise ComCallError("export_stl", tuple(faltando), None,
+                               f"corpos inexistentes: {faltando} — existem: {sorted(nomes)}")
+        for corpo, _tipo in b._all_bodies(app):
+            nome = com_get(corpo, "Name")
+            visivel = bool(com_get(corpo, "Visible"))
+            if nome not in bodies and visivel:
+                com_call(corpo, "HideBody", True)
+                ocultados.append(corpo)
+            elif nome in bodies and not visivel:
+                com_call(corpo, "HideBody", False)
+                mostrados.append(corpo)
+    try:
+        r = save_as(app, path, overwrite)
+    finally:
+        for corpo in ocultados:
+            com_call(corpo, "HideBody", False)
+        for corpo in mostrados:
+            com_call(corpo, "HideBody", True)
+    r["bodies"] = bodies or "todos os visíveis"
+    return r
+
+
 def save_as(app: Any, path: str, overwrite: bool = False) -> dict[str, Any]:
     """Salva/exporta o documento ativo para o caminho (a extensão define o formato).
 
     Formatos: .sldprt/.sldasm/.slddrw (nativo) ou exportação (.pdf, .step,
     .dxf, .dwg, .stl, .png, .igs...). Recusa sobrescrever sem overwrite=True.
+    STL sai nas coordenadas da peça, em mm e fino (ver _stl_export_prefs).
     """
     path = os.path.abspath(path)
     if os.path.exists(path) and not overwrite:
@@ -66,10 +137,12 @@ def save_as(app: Any, path: str, overwrite: bool = False) -> dict[str, Any]:
     model = _model(_active_doc(app))
     ext = com_get(model, "Extension")
     c = swconst()
-    ok, errors, warnings = com_call(
-        ext, "SaveAs3", path, c.swSaveAsCurrentVersion, c.swSaveAsOptions_Silent,
-        None, None, 0, 0,
-    )
+    prefs = _stl_export_prefs(app) if path.lower().endswith(".stl") else nullcontext()
+    with prefs:
+        ok, errors, warnings = com_call(
+            ext, "SaveAs3", path, c.swSaveAsCurrentVersion, c.swSaveAsOptions_Silent,
+            None, None, 0, 0,
+        )
     if not ok or not os.path.exists(path):
         raise ComCallError("SaveAs3", (path,), None, f"falha ao salvar/exportar (errors={errors})")
     log.info("salvo/exportado: %s", path)

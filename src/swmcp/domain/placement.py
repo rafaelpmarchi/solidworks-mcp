@@ -53,6 +53,24 @@ def rotation_matrix(rotation_deg: Sequence[float]) -> Matrix:
     return [[_clean(v) for v in linha] for linha in m]
 
 
+def euler_xyz_deg(rotation: Sequence[Sequence[float]]) -> tuple[float, float, float]:
+    """Inverso de rotation_matrix: (rx, ry, rz) em graus tais que
+    R = Rz(rz)·Ry(ry)·Rx(rx) — girar em X, depois Y, depois Z (eixos fixos).
+
+    Em trava de cardã (ry = ±90°) só a soma/diferença rx∓rz é definida:
+    rx fica 0 e rz absorve o giro."""
+    r = [[float(v) for v in linha] for linha in rotation]
+    s = max(-1.0, min(1.0, -r[2][0]))
+    ry = math.asin(s)
+    if abs(s) < 1.0 - 1e-9:
+        rx = math.atan2(r[2][1], r[2][2])
+        rz = math.atan2(r[1][0], r[0][0])
+    else:
+        rx = 0.0
+        rz = math.atan2(-r[0][1], r[1][1])
+    return math.degrees(rx), math.degrees(ry), math.degrees(rz)
+
+
 def transform_array(origin_mm: Sequence[float],
                     rotation_deg: Sequence[float] = (0.0, 0.0, 0.0)) -> list[float]:
     """Os 16 números do ArrayData: rotação, translação (m) e escala 1."""

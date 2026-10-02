@@ -174,6 +174,27 @@ def precise_sketching(app: Any) -> Iterator[None]:
                 log.exception("não consegui restaurar a preferência de esboço %s", nome)
 
 
+@contextmanager
+def no_dimension_prompt(app: Any) -> Iterator[None]:
+    """Cota criada por API sem o diálogo "Modificar".
+
+    Com swInputDimValOnCreate ligado (o padrão do usuário) cada AddDimension
+    abre o diálogo modal e a chamada COM fica presa até alguém clicar —
+    medido no SW2023 cotando um perfil por run_sw_script (12 diálogos, minutos
+    parado). A preferência volta ao valor anterior no fim.
+    """
+    c = swconst()
+    anterior = bool(com_call(app, "GetUserPreferenceToggle", c.swInputDimValOnCreate))
+    com_call(app, "SetUserPreferenceToggle", c.swInputDimValOnCreate, False)
+    try:
+        yield
+    finally:
+        try:
+            com_call(app, "SetUserPreferenceToggle", c.swInputDimValOnCreate, anterior)
+        except ComCallError:
+            log.exception("não consegui restaurar swInputDimValOnCreate")
+
+
 def _segment_points_mm(segment: Any) -> list[tuple[float, float]]:
     """Endpoints de um ISketchSegment de linha, em mm."""
     line = cast_to(segment, "ISketchLine")
@@ -223,6 +244,62 @@ def sketch_circle(app: Any, xc: float, yc: float, diameter: float) -> None:
         raise ComCallError("CreateCircleByRadius", (xc, yc, diameter), None,
                            f"círculo saiu com Ø{raio * 2:.4f} em vez de Ø{diameter} "
                            "— algum snap de esboço continua ligado")
+
+
+def model_to_sketch_mm(app: Any, points_mm: list[list[float]]) -> list[tuple[float, float, float]]:
+    """Pontos da PEÇA (mm) → coordenadas do esboço ativo (mm). O 3º valor é a
+    distância ao plano do esboço (≠ 0 = o ponto está fora dele)."""
+    from swmcp.domain.placement import apply_transform
+
+    sketch = cast_to(com_get(_skm(app), "ActiveSketch"), "ISketch")
+    xf = list(com_get(cast_to(com_call(sketch, "ModelToSketchTransform"), "IMathTransform"),
+                      "ArrayData"))
+    return [apply_transform(xf, (p[0], p[1], p[2] if len(p) > 2 else 0.0)) for p in points_mm]
+
+
+def _circle_spec(c: Any, center: tuple[float, float]) -> tuple[float, float, float]:
+    """(x, y, Ø) de um item de sketch_circles: [x, y, d] ou {x, y, d} ou
+    polar {r, angle_deg, d} em torno de center."""
+    import math
+
+    if isinstance(c, (list, tuple)):
+        if len(c) != 3:
+            raise ComCallError("sketch_circles", (c,), None, "item em lista é [x, y, diâmetro]")
+        return float(c[0]), float(c[1]), float(c[2])
+    d = float(c.get("d", c.get("diameter", 0)))
+    if "r" in c or "radius_from_center" in c:
+        r = float(c.get("r", c.get("radius_from_center")))
+        ang = math.radians(float(c.get("angle_deg", 0.0)))
+        return center[0] + r * math.cos(ang), center[1] + r * math.sin(ang), d
+    return float(c["x"]), float(c["y"]), d
+
+
+def sketch_circles(app: Any, circles: list[Any],
+                   center: tuple[float, float] = (0.0, 0.0)) -> dict[str, Any]:
+    """Vários círculos no esboço ativo numa chamada só, cada um conferido.
+
+    Item: [x, y, Ø] | {"x","y","d"} | polar {"r","angle_deg","d"} em torno de
+    center (furação: PCD/2 e ângulo). Desenha com os snaps desligados uma vez
+    só — 30 furos chamando sketch_circle um a um levavam minutos."""
+    specs = [_circle_spec(c, center) for c in circles]
+    skm = _skm(app)
+    errados = []
+    with precise_sketching(app):
+        for x, y, d in specs:
+            if d <= 0:
+                raise ComCallError("sketch_circles", (x, y, d), None, "diâmetro tem que ser > 0")
+            seg = com_call(skm, "CreateCircleByRadius",
+                           units.from_mm(x), units.from_mm(y), 0.0, units.from_mm(d / 2.0))
+            if seg is None:
+                raise ComCallError("CreateCircleByRadius", (x, y, d), None, "círculo não criado")
+            raio = units.to_mm(com_call(cast_to(seg, "ISketchArc"), "GetRadius"))
+            if abs(raio * 2.0 - d) > SKETCH_TOLERANCE_MM:
+                errados.append({"x": x, "y": y, "pedido": d, "gravado": round(raio * 2, 4)})
+    if errados:
+        raise ComCallError("sketch_circles", (len(specs),), None,
+                           f"círculos gravados com Ø diferente do pedido: {errados}")
+    return {"circles": len(specs),
+            "centers_mm": [[round(x, 4), round(y, 4)] for x, y, _ in specs]}
 
 
 def sketch_rectangle(app: Any, x1: float, y1: float, x2: float, y2: float, center: bool = False) -> None:
@@ -336,23 +413,33 @@ def _merge_coincident_points(app: Any, limite: int = 200) -> int:
     GetSketchContours ainda conta como fechado, mas revolve/extrude rejeitam sem
     dizer por quê. Cada coincidência recria as entidades, então a lista é refeita
     a cada volta.
+
+    Lê os pontos do esboço (GetSketchPoints2, um objeto por ponto) e não as
+    pontas de cada linha: num perfil a ponta final de uma linha e a inicial da
+    seguinte são o MESMO ponto, que contado duas vezes parecia duplicado — o
+    laço rodava as 200 voltas em todo sketch_polyline fechado.
     """
     model = _model(_active_doc(app))
     unidos = 0
+    total_anterior = None
     for _ in range(limite):
         skm = com_get(model, "SketchManager")
         ativo = com_get(skm, "ActiveSketch")
         if ativo is None:
             break
         sketch = cast_to(ativo, "ISketch")
+        pontos_sk = [cast_to(p, "ISketchPoint")
+                     for p in com_call(sketch, "GetSketchPoints2") or []]
+        if total_anterior is not None and len(pontos_sk) >= total_anterior:
+            log.warning("a coincidência não uniu os pontos duplicados; parando")
+            unidos -= 1
+            break
+        total_anterior = len(pontos_sk)
         grupos: dict[tuple[float, float], list[Any]] = {}
-        for raw in com_call(sketch, "GetSketchSegments") or []:
-            linha = cast_to(raw, "ISketchLine")
-            for prop in ("GetStartPoint2", "GetEndPoint2"):
-                ponto = cast_to(com_get(linha, prop), "ISketchPoint")
-                chave = (round(units.to_mm(com_get(ponto, "X")), 4),
-                         round(units.to_mm(com_get(ponto, "Y")), 4))
-                grupos.setdefault(chave, []).append(ponto)
+        for ponto in pontos_sk:
+            chave = (round(units.to_mm(com_get(ponto, "X")), 4),
+                     round(units.to_mm(com_get(ponto, "Y")), 4))
+            grupos.setdefault(chave, []).append(ponto)
         duplicado = next(((k, v) for k, v in grupos.items() if len(v) > 1), None)
         if duplicado is None:
             break
@@ -429,51 +516,105 @@ def _feature_name(feat: Any, op: str) -> str:
 def extrude(app: Any, depth_mm: float, cut: bool = False, flip: bool = False,
             through_all: bool = False, both_directions: bool = False,
             reverse_direction: bool = False) -> str:
+    """Extrusão (boss ou corte) do sketch ativo/selecionado — só o nome.
+    Ver extrude_detail."""
+    return extrude_detail(app, depth_mm, cut, flip, through_all, both_directions,
+                          reverse_direction, auto_reverse=False)["feature"]
+
+
+def extrude_detail(app: Any, depth_mm: float, cut: bool = False, flip: bool = False,
+                   through_all: bool = False, both_directions: bool = False,
+                   reverse_direction: bool = False,
+                   auto_reverse: bool = True) -> dict[str, Any]:
     """Extrusão (boss ou corte) do sketch ativo/selecionado.
 
     São três coisas diferentes, fáceis de confundir:
     - reverse_direction (Dir da API): para que lado do plano do sketch a
       extrusão cresce. É isto que se quer para cortar "para o outro lado".
+      ATENÇÃO: no CORTE o sentido padrão é CONTRA a normal do plano (entra na
+      face onde o esboço está), no ressalto é A FAVOR — o mesmo
+      reverse_direction aponta para lados opostos nos dois.
     - both_directions (Sd=False): cresce para os dois lados do plano.
     - flip (Flip da API): em corte, inverte QUAL LADO do perfil vira material —
       passar flip=True por engano tira tudo menos o prisma do perfil.
+
+    auto_reverse: corte que o SolidWorks recusa (devolve None — tipicamente
+    porque do lado pedido não há material) é tentado de novo para o outro
+    lado. O retorno diz qual sentido valeu em reverse_direction_used.
     """
     model = _model(_active_doc(app))
     fm = com_get(model, "FeatureManager")
+    _clear_selection_if_sketch_open(model)
     c = swconst()
     end = c.swEndCondThroughAll if through_all else c.swEndCondBlind
     d = units.from_mm(abs(depth_mm))
     single_ended = not both_directions
-    if cut:
-        feat = com_call(
-            fm, "FeatureCut4",
-            single_ended, flip, reverse_direction, end, end, d, d, False, False, False, False,
-            0.0, 0.0, False, False, False, False, False, True, True,
-            True, True, False, c.swStartSketchPlane, 0.0, False, False,
-        )
-    else:
-        feat = com_call(
+
+    def criar(rev: bool) -> Any:
+        if cut:
+            return com_call(
+                fm, "FeatureCut4",
+                single_ended, flip, rev, end, end, d, d, False, False, False, False,
+                0.0, 0.0, False, False, False, False, False, True, True,
+                True, True, False, c.swStartSketchPlane, 0.0, False, False,
+            )
+        return com_call(
             fm, "FeatureExtrusion3",
-            single_ended, flip, reverse_direction, end, end, d, d, False, False, False, False,
+            single_ended, flip, rev, end, end, d, d, False, False, False, False,
             0.0, 0.0, False, False, False, False, True, True, True,
             c.swStartSketchPlane, 0.0, False,
         )
+
+    usado = reverse_direction
+    feat = criar(usado)
+    if feat is None and cut and auto_reverse and not both_directions:
+        log.warning("corte recusado com reverse_direction=%s; tentando o outro lado", usado)
+        usado = not reverse_direction
+        feat = criar(usado)
     name = _feature_name(feat, "FeatureCut4" if cut else "FeatureExtrusion3")
     log.info("extrusão %s criada: %s (%.2fmm, %s)", "corte" if cut else "boss", name, depth_mm,
-             "duas direções" if both_directions else ("invertida" if reverse_direction else "normal"))
-    return name
+             "duas direções" if both_directions else ("invertida" if usado else "normal"))
+    out: dict[str, Any] = {"feature": name, "reverse_direction_used": usado}
+    if usado != reverse_direction:
+        out["aviso"] = ("o corte foi recusado para o lado pedido e saiu com "
+                        f"reverse_direction={usado} — confira se era esse o lado")
+    return out
+
+
+def _clear_selection_if_sketch_open(model: Any) -> None:
+    """Com esboço ABERTO, a feature usa as entidades selecionadas (contornos
+    selecionados) em vez do esboço inteiro. A cotagem automática deixa linha
+    selecionada e o revolve saía recusado sem motivo (medido no SW2023, perfil
+    de disco com concordâncias). Esboço fechado e selecionado fica como está."""
+    if com_get(com_get(model, "SketchManager"), "ActiveSketch") is not None:
+        com_call(model, "ClearSelection2", True)
 
 
 def revolve(app: Any, angle_deg: float = 360.0, cut: bool = False) -> str:
     """Revolução do sketch ativo (precisa de linha de centro no sketch)."""
     model = _model(_active_doc(app))
     fm = com_get(model, "FeatureManager")
+    _clear_selection_if_sketch_open(model)
     ang = units.from_deg(angle_deg)
-    feat = com_call(
-        fm, "FeatureRevolve2",
-        True, True, False, cut, False, False, 0, 0, ang, 0.0,
-        False, False, 0.0, 0.0, 0, 0.0, 0.0, True, True, True,
-    )
+
+    def criar() -> Any:
+        return com_call(
+            fm, "FeatureRevolve2",
+            True, True, False, cut, False, False, 0, 0, ang, 0.0,
+            False, False, 0.0, 0.0, 0, 0.0, 0.0, True, True, True,
+        )
+
+    feat = criar()
+    if feat is None and com_get(com_get(model, "SketchManager"), "ActiveSketch") is not None:
+        # medido no SW2023: logo depois da cotagem automática de um perfil com
+        # concordâncias o 1º FeatureRevolve2 volta None e o 2º, no MESMO
+        # esboço, sai certo
+        import time
+
+        log.warning("revolve recusado na 1ª tentativa com o esboço aberto; repetindo")
+        time.sleep(1.0)
+        _clear_selection_if_sketch_open(model)
+        feat = criar()
     return _feature_name(feat, "FeatureRevolve2")
 
 
@@ -812,7 +953,8 @@ def add_sketch_dimension(app: Any, x_mm: float, y_mm: float, value_mm: float | N
     Se value_mm vier, a cota é ajustada para esse valor (dirige a geometria).
     """
     model = _model(_active_doc(app))
-    raw = com_call(model, "AddDimension2", units.from_mm(x_mm), units.from_mm(y_mm), 0.0)
+    with no_dimension_prompt(app):
+        raw = com_call(model, "AddDimension2", units.from_mm(x_mm), units.from_mm(y_mm), 0.0)
     if raw is None:
         raise ComCallError("AddDimension2", (x_mm, y_mm), None,
                            "cota não criada — selecione a entidade do sketch antes")

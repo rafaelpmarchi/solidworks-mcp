@@ -51,3 +51,13 @@ def test_rotacao_e_ortonormal(rot):
         for j in range(3):
             prod = sum(m[k][i] * m[k][j] for k in range(3))
             assert abs(prod - (1.0 if i == j else 0.0)) < 1e-12
+
+
+@pytest.mark.parametrize("ang", [(24.2, -10.5, 164.4), (0, 0, 0), (-90, 30, 45),
+                                 (10, 90, 20), (5, -90, -40)])
+def test_euler_xyz_e_o_inverso_de_rotation_matrix(ang):
+    from swmcp.domain.placement import euler_xyz_deg
+
+    r = rotation_matrix(ang)
+    volta = rotation_matrix(euler_xyz_deg(r))
+    assert all(abs(r[i][j] - volta[i][j]) < 1e-9 for i in range(3) for j in range(3))

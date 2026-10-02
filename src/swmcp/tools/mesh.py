@@ -58,6 +58,23 @@ def _active_mesh() -> str:
     return state["mesh"]
 
 
+_IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+
+def _matmul4(a: list[float], b: list[float]) -> list[float]:
+    """a·b de matrizes 4x4 em lista de 16 (por linha). Sem numpy: o venv do
+    servidor não tem."""
+    return [sum(a[4 * i + k] * b[4 * k + j] for k in range(4))
+            for i in range(4) for j in range(4)]
+
+
+def _compose_transform(state: dict[str, Any], matrix: list[float]) -> None:
+    """Acumula no estado a transformação ORIGINAL → malha ativa (a que
+    mesh_apply_to_sw aplica ao corpo de malha do SolidWorks)."""
+    atual = state.get("transform") or _IDENTITY
+    state["transform"] = _matmul4([float(v) for v in matrix], atual)
+
+
 def _work(name: str) -> str:
     _WORKDIR.mkdir(parents=True, exist_ok=True)
     return str(_WORKDIR / f"{uuid.uuid4().hex[:8]}_{name}")
@@ -208,7 +225,8 @@ def _resolve_region(region: dict | None) -> dict | None:
 
 def op_import(path: str) -> dict[str, Any]:
     info = _engine("info", {"mesh": path})
-    _save_state({"mesh": path, "labels": None, "original": path})
+    _save_state({"mesh": path, "labels": None, "original": path,
+                 "transform": list(_IDENTITY)})
     return {"mesh": path, **info}
 
 
@@ -262,7 +280,8 @@ def op_export(out_path: str) -> dict[str, Any]:
 
 def op_align(mode: str = "pca", region: dict | None = None,
              reference: str | None = None,
-             inlier_mm: float = 0.5) -> dict[str, Any]:
+             inlier_mm: float = 0.5, axis_hint: list | None = None,
+             z_origin: str = "centroid") -> dict[str, Any]:
     out = _work("aligned.stl")
     args: dict[str, Any] = {"mesh": _active_mesh(), "out": out,
                             "mode": mode, "region": _resolve_region(region)}
@@ -272,9 +291,13 @@ def op_align(mode: str = "pca", region: dict | None = None,
                                "(ou use mode=to_cad para exportar o documento ativo)")
         args["reference"] = reference
         args["inlier_mm"] = inlier_mm
+    if mode == "axis":
+        args["axis_hint"] = axis_hint
+        args["z_origin"] = z_origin
     r = _engine("align", args)
     state = _load_state()
     state.update({"mesh": out, "labels": None, "regioes": None})
+    _compose_transform(state, r["matrix"])
     if mode == "to_reference":
         state["cad_stl"] = reference
         ext = r.get("referencia_extents_mm") or []
@@ -412,6 +435,33 @@ def op_freeform(out_step: str, region: dict | None = None,
                                 "out_step": out_step,
                                 "grid": list(grid), "tol_mm": tol_mm,
                                 "extend_mm": extend_mm})
+
+
+def op_axis(region: dict | None = None, axis_hint: list | None = None) -> dict[str, Any]:
+    return _engine("axis", {"mesh": _active_mesh(), "region": _resolve_region(region),
+                            "axis_hint": axis_hint})
+
+
+def op_revolve_profile(axis_point: list | None = None, axis_dir: list | None = None,
+                       region: dict | None = None, min_coverage: float = 0.4,
+                       tol_mm: float = 0.1, cell_mm: float = 0.25,
+                       thickness_mm: float | None = None) -> dict[str, Any]:
+    return _engine("revolve_profile", {
+        "mesh": _active_mesh(), "axis_point": axis_point or [0, 0, 0],
+        "axis_dir": axis_dir or [0, 0, 1], "region": _resolve_region(region),
+        "min_coverage": min_coverage, "tol_mm": tol_mm, "cell_mm": cell_mm,
+        "thickness_mm": thickness_mm})
+
+
+def op_detect_holes(axis_point: list | None = None, axis_dir: list | None = None,
+                    min_diameter_mm: float = 1.0, group_tol_mm: float = 0.4,
+                    angle_tol_deg: float = 1.0,
+                    region: dict | None = None) -> dict[str, Any]:
+    return _engine("holes", {
+        "mesh": _active_mesh(), "axis_point": axis_point or [0, 0, 0],
+        "axis_dir": axis_dir or [0, 0, 1], "min_diameter_mm": min_diameter_mm,
+        "group_tol_mm": group_tol_mm, "angle_tol_deg": angle_tol_deg,
+        "region": _resolve_region(region)})
 
 
 def op_deviation(reference_stl: str | None = None, primitive: dict | None = None,
@@ -559,6 +609,184 @@ def op_primitive_to_sw(session: SwSession, primitive: dict) -> dict[str, Any]:
             "primitive": primitive}
 
 
+def _v_sub(a, b):
+    return [float(x) - float(y) for x, y in zip(a, b)]
+
+
+def _v_cross(a, b):
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+
+
+def _v_unit(a):
+    n = sum(x * x for x in a) ** 0.5
+    if n < 1e-12:
+        raise RuntimeError("vetor nulo")
+    return [x / n for x in a]
+
+
+def radial_in_plane(axis_dir: list[float], plane_normal: list[float]) -> list[float]:
+    """Direção radial que fica DENTRO do plano do esboço (⊥ ao eixo e à
+    normal do plano), com sinal para o lado +X (ou +Y) do modelo."""
+    a = _v_unit(axis_dir)
+    n = _v_unit(plane_normal)
+    if abs(sum(x * y for x, y in zip(a, n))) > 0.01:
+        raise RuntimeError("o plano do esboço não contém o eixo da peça — use um "
+                           "plano que passe pelo eixo (com a peça alinhada em Z: "
+                           "'Plano superior' ou 'Plano direito')")
+    r = _v_unit(_v_cross(n, a))
+    if r[0] < -1e-9 or (abs(r[0]) <= 1e-9 and r[1] < 0):
+        r = [-x for x in r]
+    return r
+
+
+def profile_model_points(axis_point: list[float], axis_dir: list[float],
+                         radial: list[float], verts_rz: list[list[float]]) -> list[list[float]]:
+    """(r, z) do perfil → pontos da peça (mm): ponto do eixo + r·radial + z·eixo."""
+    a = _v_unit(axis_dir)
+    return [[axis_point[i] + r * radial[i] + z * a[i] for i in range(3)]
+            for r, z in verts_rz]
+
+
+def _sketch_normal(app) -> list[float]:
+    """Normal do esboço ativo em coordenadas da peça (pela transformada)."""
+    o = m.model_to_sketch_mm(app, [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    # o 3º valor de cada eixo da peça no esboço é a componente na normal
+    return [o[1][2] - o[0][2], o[2][2] - o[0][2], o[3][2] - o[0][2]]
+
+
+def op_revolve_profile_to_sw(session: SwSession, profile: dict, plane: str,
+                             fillets: bool = False) -> dict[str, Any]:
+    """Desenha o perfil (r, z) num esboço NOVO no plano dado + a linha de
+    centro no eixo. Fecha com o perfil fechado do motor (scan dos dois lados)
+    ou com closed_vertices_rz (thickness_mm); aberto fica aberto (revolve de
+    perfil aberto só sai como superfície/parede fina)."""
+    axis_point = profile["axis_point"]
+    axis_dir = profile["axis_dir"]
+    fechado = profile.get("closed")
+    verts = profile.get("closed_vertices_rz") if not fechado else None
+    usar_fechamento = verts is not None
+    verts = verts or profile["vertices_rz"]
+    zs = [z for _, z in verts]
+    resultado: dict[str, Any] = {}
+
+    def draw(app):
+        sketch = m.insert_sketch(app, plane)
+        normal = _sketch_normal(app)
+        radial = radial_in_plane(axis_dir, normal)
+        pts = m.model_to_sketch_mm(app, profile_model_points(axis_point, axis_dir, radial, verts))
+        fora = max(abs(p[2]) for p in pts)
+        if fora > 0.01:
+            raise RuntimeError(f"o perfil sai {fora:.3f} mm do plano do esboço")
+        p2 = [[round(p[0], 6), round(p[1], 6)] for p in pts]
+        poly = m.sketch_polyline(app, p2, close=bool(fechado or usar_fechamento))
+        eixo = m.model_to_sketch_mm(app, profile_model_points(
+            axis_point, axis_dir, radial, [[0.0, min(zs) - 5.0], [0.0, max(zs) + 5.0]]))
+        m.sketch_line(app, eixo[0][0], eixo[0][1], eixo[1][0], eixo[1][1], centerline=True)
+        feitos, falhas = [], []
+        if fillets:
+            for f in profile.get("fillets") or []:
+                i = f["vertex"]
+                if i >= len(p2):
+                    continue
+                try:
+                    _sketch_corner_fillet(app, p2[i], f["radius_mm"])
+                    feitos.append({"vertex": i, "radius_mm": f["radius_mm"]})
+                except Exception as exc:  # noqa: BLE001 — filete é extra; o perfil fica
+                    falhas.append({"vertex": i, "erro": str(exc)[:200]})
+        resultado.update({"sketch": sketch, "plane": plane, "radial_dir": radial,
+                          "polyline": poly, "fillets_applied": feitos,
+                          "fillets_failed": falhas,
+                          "closed": bool(fechado or usar_fechamento)})
+
+    session.run(draw)
+    if not resultado["closed"]:
+        resultado["aviso"] = ("perfil ABERTO (scan de um lado só): passe thickness_mm "
+                              "para fechar com uma parede estimada antes do revolve")
+    return resultado
+
+
+def _sketch_corner_fillet(app, corner_mm: list[float], radius_mm: float) -> None:
+    """Concordância no canto do esboço ativo que cai em corner_mm."""
+    from swmcp.com import units
+    from swmcp.com.invoke import com_call, com_get
+    from swmcp.com.session import cast_to
+
+    model = cast_to(com_get(app, "ActiveDoc"), "IModelDoc2")
+    skm = com_get(model, "SketchManager")
+    sketch = cast_to(com_get(skm, "ActiveSketch"), "ISketch")
+    alvo = None
+    for raw in com_call(sketch, "GetSketchPoints2") or []:
+        p = cast_to(raw, "ISketchPoint")
+        if (abs(units.to_mm(com_get(p, "X")) - corner_mm[0]) < 1e-3
+                and abs(units.to_mm(com_get(p, "Y")) - corner_mm[1]) < 1e-3):
+            alvo = p
+            break
+    if alvo is None:
+        raise RuntimeError(f"canto {corner_mm} não achado no esboço")
+    com_call(model, "ClearSelection2", True)
+    com_call(alvo, "Select4", False, None)
+    # swConstrainedCornerAction_KeepGeometry = 1: mantém a geometria
+    seg = com_call(skm, "CreateFillet", units.from_mm(radius_mm), 1)
+    com_call(model, "ClearSelection2", True)
+    if not seg:
+        raise RuntimeError("CreateFillet recusou (raio maior que as linhas permitem?)")
+
+
+def op_holes_to_sw(session: SwSession, holes: dict, diameters: list[float] | None = None,
+                   tol_mm: float = 0.4) -> dict[str, Any]:
+    """Desenha os furos com parede (has_wall) no esboço ATIVO, que precisa ser
+    perpendicular ao eixo. diameters filtra (± tol_mm)."""
+    alvos = [h for h in holes["holes"] if h["has_wall"]]
+    if diameters:
+        alvos = [h for h in alvos if any(abs(h["diameter_mm"] - d) <= tol_mm for d in diameters)]
+    if not alvos:
+        return {"desenhados": 0, "aviso": "nenhum furo (com parede) para desenhar"}
+    a = _v_unit(holes["axis_dir"])
+
+    def draw(app):
+        normal = _sketch_normal(app)
+        if abs(abs(sum(x * y for x, y in zip(_v_unit(normal), a))) - 1.0) > 1e-3:
+            raise RuntimeError("o esboço ativo não é perpendicular ao eixo dos furos — "
+                               "abra o esboço numa face/plano normal ao eixo")
+        pts = m.model_to_sketch_mm(app, [h["center_xyz"] for h in alvos])
+        return m.sketch_circles(app, [[p[0], p[1], h["diameter_mm"]]
+                                      for p, h in zip(pts, alvos)])
+
+    r = session.run(draw)
+    return {"desenhados": r["circles"], "centers_mm": r["centers_mm"]}
+
+
+def op_apply_to_sw(session: SwSession, body_name: str = "") -> dict[str, Any]:
+    """Aplica ao corpo de malha do SolidWorks a transformação acumulada
+    original → malha ativa (mesh_align & cia.), para o scan no SW e o motor
+    ficarem no mesmo sistema."""
+    from swmcp.com.wrappers import bodies as b
+
+    state = _load_state()
+    t = state.get("transform")
+    if not t:
+        raise RuntimeError("sessão sem transformação registrada — reimporte a malha "
+                           "(mesh_import) e alinhe de novo")
+    if max(abs(x - y) for x, y in zip(t, _IDENTITY)) < 1e-9:
+        return {"aviso": "a malha ativa ainda não foi alinhada — nada a mover"}
+    info = op_info()
+    esperado = info["bounds_min_mm"] + info["bounds_max_mm"]
+    r = session.run(lambda app: b.move_body_by_matrix(app, t, body_name, esperado))
+    r["original"] = state.get("original")
+    return r
+
+
+def op_deviation_active_doc(session: SwSession, bodies: list[str] | None = None,
+                            **kw) -> dict[str, Any]:
+    """Desvio da malha ativa contra o documento aberto, SEM realinhar: o STL
+    sai nas coordenadas da peça (só os corpos pedidos, se vierem)."""
+    stl = _work("doc.stl")
+    session.run(lambda app: o.export_stl(app, stl, bodies, True))
+    r = op_deviation(reference_stl=stl, **kw)
+    r["reference_stl"] = stl
+    return r
+
+
 # ----------------------------------------------------------------- tools MCP
 
 def register(mcp: MCPServer, session: SwSession) -> None:
@@ -585,8 +813,16 @@ def register(mcp: MCPServer, session: SwSession) -> None:
     @mcp.tool()
     def mesh_align(mode: str = "pca", region: dict | None = None,
                    reference_stl: str | None = None,
-                   inlier_mm: float = 0.5) -> dict[str, Any]:
+                   inlier_mm: float = 0.5, axis_hint: list | None = None,
+                   z_origin: str = "centroid") -> dict[str, Any]:
         """Alinha a malha ativa e a torna a ativa. mode:
+        'axis' — PEÇA DE REVOLUÇÃO: acha o eixo pela geometria das normais
+          (toda reta normal de uma superfície de revolução corta o eixo; furos
+          fora do centro e orelhas viram outliers) e o leva para Z com o
+          ponto do eixo na origem. Devolve 'eixo' com inlier_area_fraction,
+          rms_mm e eigen_ratio (< 3 = eixo mal determinado). axis_hint dá o
+          sentido de +Z; z_origin: 'centroid' | 'min' (peça em Z ≥ 0) | 'max'.
+          Use em vez de 'pca' em disco/flange/cubo: o PCA erra o centro.
         'to_cad' — registra o scan NO DOCUMENTO ABERTO do SolidWorks (exporta
           um STL temporário do modelo e faz best-fit rígido PCA + ICP): a
           malha passa a viver no sistema de coordenadas do desenho, e daí
@@ -605,7 +841,67 @@ def register(mcp: MCPServer, session: SwSession) -> None:
         [x,y,z],"radius":r}} | {"labels": {"value": N}}."""
         if mode == "to_cad":
             return op_align_to_cad(session, region, inlier_mm)
-        return op_align(mode, region, reference_stl, inlier_mm)
+        return op_align(mode, region, reference_stl, inlier_mm, axis_hint, z_origin)
+
+    @mcp.tool()
+    def mesh_revolve_profile(min_coverage: float = 0.4, tol_mm: float = 0.1,
+                             thickness_mm: float | None = None,
+                             region: dict | None = None,
+                             axis_point: list | None = None,
+                             axis_dir: list | None = None,
+                             draw: bool = False, plane: str = "Plano superior",
+                             fillets: bool = False) -> dict[str, Any]:
+        """Perfil de REVOLUÇÃO (r, z) da malha ativa em torno do eixo (padrão:
+        Z pela origem — rode mesh_align(mode='axis') antes). Só entram as
+        superfícies vistas em >= min_coverage da volta (furos e orelhas ficam
+        de fora; onde duas superfícies se alternam na volta fica a de maior
+        cobertura). Devolve vertices_rz (polilinha de CANTOS VIVOS, retas
+        reajustadas), fillets (raio de concordância estimado por canto),
+        rms_mm/p95_mm da curva contra a polilinha e closed. Scan de um lado só
+        sai ABERTO: thickness_mm fecha com uma parede de espessura constante
+        (closed_vertices_rz — é ESTIMATIVA, confira a espessura real).
+        draw=True cria um esboço em `plane` (tem que conter o eixo) com o
+        perfil de cantos vivos + linha de centro, pronto para revolve.
+        fillets=True põe também as concordâncias no esboço — DESLIGADO por
+        padrão: em 02/10/2026 o SolidWorks caiu (mfc140u.dll) na cotagem
+        automática do revolve sobre um perfil de eixo vertical com essas
+        concordâncias. Prefira filetar as arestas depois (fillet_circular_edges)."""
+        r = op_revolve_profile(axis_point, axis_dir, region, min_coverage, tol_mm,
+                               thickness_mm=thickness_mm)
+        if draw:
+            r["desenho"] = op_revolve_profile_to_sw(session, r, plane, fillets)
+        return r
+
+    @mcp.tool()
+    def mesh_detect_holes(min_diameter_mm: float = 1.0, group_tol_mm: float = 0.4,
+                          angle_tol_deg: float = 1.0, region: dict | None = None,
+                          axis_point: list | None = None,
+                          axis_dir: list | None = None, draw: bool = False,
+                          draw_diameters: list[float] | None = None) -> dict[str, Any]:
+        """Furos passantes vistos ao longo do eixo (padrão Z pela origem —
+        alinhe com mesh_align antes). O Ø sai do ajuste de círculo nas
+        PAREDES do furo (o contorno do vazio sozinho erra ~0,4 mm); vazio sem
+        parede é lacuna de scan (adesivo de alvo, reflexo): has_wall=False,
+        fora dos grupos. groups_by_size agrupa por Ø + raio; groups_by_circle
+        só por raio (furação mista num mesmo PCD); cada grupo traz pattern:
+        posições na volta, passo, ângulo inicial e quais posições FALTAM.
+        draw=True desenha os furos com parede no esboço ATIVO (perpendicular
+        ao eixo); draw_diameters filtra quais Ø desenhar."""
+        r = op_detect_holes(axis_point, axis_dir, min_diameter_mm, group_tol_mm,
+                            angle_tol_deg, region)
+        if draw:
+            r["desenho"] = op_holes_to_sw(session, r, draw_diameters, group_tol_mm)
+        return r
+
+    @mcp.tool()
+    def mesh_apply_to_sw(body_name: str = "") -> dict[str, Any]:
+        """Leva o corpo de malha do SolidWorks (o scan importado no documento
+        ativo) para o MESMO sistema da malha ativa do motor, aplicando a
+        transformação acumulada desde o mesh_import (mesh_align & cia.) com
+        features Mover/Copiar corpo (giro X, Y, Z e translação). body_name
+        vazio = o maior corpo. Confere a caixa final contra a da malha ativa
+        (box_error_mm/ok). Altera o documento ativo."""
+        return op_apply_to_sw(session, body_name)
 
     @mcp.tool()
     def mesh_segment(radius_mm: float = 3.0, smooth_threshold_deg: float = 8.0,
@@ -697,13 +993,22 @@ def register(mcp: MCPServer, session: SwSession) -> None:
                            region: dict | None = None,
                            max_dist_mm: float = 5.0,
                            scale_mm: float | None = None,
-                           pass_fail_tol_mm: float | None = None) -> dict[str, Any]:
+                           pass_fail_tol_mm: float | None = None,
+                           bodies: list[str] | None = None) -> dict[str, Any]:
         """Mapa de desvio da malha ativa contra uma referência: um STL exportado
-        do modelo reconstruído (export_document) OU uma primitiva ajustada.
+        do modelo reconstruído (export_stl) OU uma primitiva ajustada.
+        reference_stl='active_doc' exporta o documento aberto NAS COORDENADAS
+        DA PEÇA (sem realinhar — é a medida honesta do modelo como está;
+        bodies escolhe os corpos, senão vão todos os visíveis: oculte a malha
+        de scan do documento, senão ela vira a referência).
         Gera PNG com 4 vistas (vermelho = scan acima, azul = abaixo, cinza =
         SEM DADO — lacuna de scan não é interpolada) + estatísticas (rms, p95).
         scale_mm fixa a escala de cor (ex.: 0.5 para ±0,5 mm).
         pass_fail_tol_mm ativa o modo Passa/Falha: verde = dentro de ±tol,
         gradiente até 5x a tolerância, e retorna 'dentro_tolerancia'."""
+        if reference_stl == "active_doc":
+            return op_deviation_active_doc(
+                session, bodies, region=region, max_dist_mm=max_dist_mm,
+                scale_mm=scale_mm, pass_fail_tol_mm=pass_fail_tol_mm)
         return op_deviation(reference_stl, primitive, region, max_dist_mm,
                             scale_mm, pass_fail_tol_mm)

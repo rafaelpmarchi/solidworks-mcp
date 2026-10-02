@@ -120,3 +120,50 @@ def test_engine_info_roundtrip(tmp_path):
     info = mesh._engine("info", {"mesh": str(stl)})
     assert info["faces"] == 4
     assert info["extents_mm"] == [1.0, 1.0, 1.0]
+
+
+def test_tools_de_revolucao_e_corpos_registradas():
+    from swmcp.server import build_server
+
+    server = build_server()
+    if not hasattr(server, "_tool_manager"):
+        pytest.skip("estrutura interna do MCPServer mudou")
+    nomes = set(server._tool_manager._tools.keys())
+    assert {"mesh_revolve_profile", "mesh_detect_holes", "mesh_apply_to_sw",
+            "list_bodies", "set_body_visibility", "set_reference_visibility",
+            "surface_from_faces", "export_stl", "sketch_circles"} <= nomes
+
+
+def test_transformacao_acumulada():
+    st = {"transform": list(mesh._IDENTITY)}
+    gira_z90 = [0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    desloca = [1, 0, 0, 10, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    mesh._compose_transform(st, gira_z90)
+    mesh._compose_transform(st, desloca)
+    t = st["transform"]
+    # ponto (1,0,0): gira -> (0,1,0), desloca -> (10,1,0)
+    p = [sum(t[4 * i + j] * v for j, v in enumerate([1, 0, 0, 1])) for i in range(3)]
+    assert p == [10, 1, 0]
+
+
+def test_import_zera_a_transformacao(tmp_path, monkeypatch):
+    monkeypatch.setattr(mesh, "_STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(mesh, "_engine", lambda cmd, args: {"faces": 4})
+    mesh._save_state({"mesh": "x", "transform": [2] * 16})
+    mesh.op_import(r"C:\scan.stl")
+    assert mesh._load_state()["transform"] == mesh._IDENTITY
+
+
+def test_radial_no_plano_do_esboco():
+    # eixo Z, esboço no Plano superior (normal Y): radial = +X
+    assert mesh.radial_in_plane([0, 0, 1], [0, 1, 0]) == pytest.approx([1, 0, 0])
+    # Plano direito (normal X): radial = +Y
+    assert mesh.radial_in_plane([0, 0, 1], [1, 0, 0]) == pytest.approx([0, 1, 0])
+    with pytest.raises(RuntimeError, match="não contém o eixo"):
+        mesh.radial_in_plane([0, 0, 1], [0, 0, 1])
+
+
+def test_pontos_do_perfil_na_peca():
+    pts = mesh.profile_model_points([1, 2, 3], [0, 0, 1], [1, 0, 0],
+                                    [[10, 0], [10, 5]])
+    assert pts == [[11, 2, 3], [11, 2, 8]]

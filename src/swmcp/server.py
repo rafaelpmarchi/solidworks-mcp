@@ -86,6 +86,21 @@ mesh_import → mesh_align (assentar a peça nos eixos) → mesh_segment →
 mesh_fit_primitive nas regiões lisas → materializar no SW → modelar → exportar
 STL do modelo → mesh_deviation_map para conferir o desvio scan × CAD.
 Lacuna de scan aparece como 'sem dado' no mapa — não é interpolada.
+Peça de REVOLUÇÃO (disco, flange, cubo, polia): mesh_align(mode='axis') acha o
+eixo real pela geometria (o PCA erra o centro quando há furos/orelhas ou scan
+de um lado só) e o põe em Z; mesh_revolve_profile tira o perfil (r, z) com os
+cantos vivos e o raio de concordância de cada canto e, com draw=True, desenha
+perfil + linha de centro num esboço que contém o eixo, pronto para revolve
+(thickness_mm fecha um scan de um lado só — estimativa); mesh_detect_holes
+acha os furos ao longo do eixo com Ø pelas paredes e o padrão angular (12
+posições a cada 30°, quais faltam), e com draw=True desenha os círculos no
+esboço ativo. mesh_apply_to_sw leva o corpo de malha do SolidWorks para o
+mesmo sistema alinhado do motor (Mover/Copiar corpo), para modelar em cima
+dele. Malha de milhões de triângulos visível deixa a API lenta: oculte com
+set_body_visibility enquanto modela. mesh_deviation_map(reference_stl=
+'active_doc') mede o documento aberto sem realinhar (STL nas coordenadas da
+peça; bodies= escolhe os corpos). surface_from_faces vira as faces de um
+sólido auxiliar em corpo de superfície (o lado que o scanner viu).
 
 Estrutura soldada (weldment): sketch com linhas conectadas → close_sketch →
 insert_structural_member(norma, tipo, tamanho, sketch) — os nomes vêm de
@@ -159,6 +174,7 @@ def build_server() -> MCPServer:
 
     from swmcp.tools import (
         assembly,
+        bodies,
         connection,
         create,
         create_drawing,
@@ -186,6 +202,7 @@ def build_server() -> MCPServer:
     machining.register(mcp, session)
     pdf.register(mcp, session)
     output.register(mcp, session)
+    bodies.register(mcp, session)
     assembly.register(mcp, session)
     create_drawing.register(mcp, session)
     script.register(mcp, session)

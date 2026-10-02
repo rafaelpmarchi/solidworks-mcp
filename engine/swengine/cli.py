@@ -10,7 +10,13 @@ Comandos:
   smooth    {"mesh": path, "out": path, "iterations"?: int}
   flip      {"mesh": path, "out": path}
   export    {"mesh": path, "out": path}   (formato pela extensão)
-  align     {"mesh": path, "out": path, "mode": "pca|bbox|plane_to_xy|matrix|to_reference",
+  axis      {"mesh": path, "region"?, "axis_hint"?: [ijk]}  (eixo de revolução)
+  revolve_profile {"mesh": path, "axis_point"?, "axis_dir"?, "region"?,
+             "cell_mm"?, "min_coverage"?, "tol_mm"?, "thickness_mm"?}
+  holes     {"mesh": path, "axis_point"?, "axis_dir"?, "pixel_mm"?,
+             "min_diameter_mm"?, "group_tol_mm"?, "angle_tol_deg"?, "region"?}
+  align     {"mesh": path, "out": path, "mode": "pca|bbox|plane_to_xy|matrix|to_reference|axis",
+             "axis_hint"?, "z_origin"?: centroid|min|max (mode=axis),
              "reference"?: path (STL do CAD, mode=to_reference), "samples"?,
              "seed_rotations"?, "inlier_mm"?, "matrix"?: 4x4 (chute inicial),
              "region"?: {...}, "matrix"?: [16 floats]}
@@ -96,11 +102,46 @@ def _run(command: str, a: dict) -> dict:
                     "registro": stats,
                     "referencia_extents_mm": np.round(ref.extents, 3).tolist(),
                     **mesh_io.mesh_info(out)}
+        if a["mode"] == "axis":
+            matrix, eixo = align_mod.align_axis(
+                mesh, a.get("region"), a.get("axis_hint"),
+                a.get("z_origin", "centroid"))
+            out = align_mod.apply_alignment(mesh, matrix)
+            mesh_io.save_mesh(out, a["out"])
+            return {"out": a["out"], "matrix": np.round(matrix, 8).ravel().tolist(),
+                    "eixo": eixo, **mesh_io.mesh_info(out)}
         out, matrix = align_mod.align(mesh, a["mode"], a.get("region"),
                                       a.get("matrix"))
         mesh_io.save_mesh(out, a["out"])
         return {"out": a["out"], "matrix": np.round(matrix, 8).ravel().tolist(),
                 **mesh_io.mesh_info(out)}
+
+    if command == "axis":
+        from . import revolution as rev_mod
+        mesh = mesh_io.load_mesh(a["mesh"])
+        return rev_mod.fit_axis(mesh, a.get("region"), a.get("axis_hint"))
+
+    if command == "revolve_profile":
+        from . import revolution as rev_mod
+        mesh = mesh_io.load_mesh(a["mesh"])
+        return rev_mod.revolve_profile(
+            mesh, a.get("axis_point", [0, 0, 0]), a.get("axis_dir", [0, 0, 1]),
+            region=a.get("region"),
+            cell_mm=float(a.get("cell_mm", 0.25)),
+            min_coverage=float(a.get("min_coverage", 0.4)),
+            tol_mm=float(a.get("tol_mm", 0.1)),
+            thickness_mm=a.get("thickness_mm"))
+
+    if command == "holes":
+        from . import revolution as rev_mod
+        mesh = mesh_io.load_mesh(a["mesh"])
+        return rev_mod.detect_holes(
+            mesh, a.get("axis_point", [0, 0, 0]), a.get("axis_dir", [0, 0, 1]),
+            pixel_mm=float(a.get("pixel_mm", 0.25)),
+            min_diameter_mm=float(a.get("min_diameter_mm", 1.0)),
+            group_tol_mm=float(a.get("group_tol_mm", 0.4)),
+            angle_tol_deg=float(a.get("angle_tol_deg", 1.0)),
+            region=a.get("region"))
 
     if command == "segment":
         mesh = mesh_io.load_mesh(a["mesh"])

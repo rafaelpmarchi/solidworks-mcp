@@ -22,7 +22,9 @@ Helpers para as armadilhas medidas no SW2023 (ver cada um):
   darr([..])               VARIANT de doubles — MathUtility.CreatePoint com lista
                            Python corrompe as coordenadas
 
-Print vai para o retorno também. Sem timeout: cuidado com diálogos modais.
+Print vai para o retorno também. Sem timeout: cuidado com diálogos modais —
+o "Modificar" das cotas já vem desligado (swInputDimValOnCreate) durante o
+script e volta ao valor do usuário no fim.
 Com scratch=True o código roda numa PEÇA NOVA descartável, fechada sem salvar
 no fim, e o documento que estava ativo volta a ser o ativo — é para testar
 chamada de API sem criar/apagar feature na peça que o usuário está vendo.
@@ -113,9 +115,13 @@ def run_script(app: Any, code: str, scratch: bool = False) -> dict[str, Any]:
     }
     stdout = io.StringIO()
     log.info("run_sw_script (%d chars%s)", len(code), ", rascunho" if scratch else "")
+    from swmcp.com.wrappers.modeling import no_dimension_prompt
+
     try:
         scope.update(_helpers(app))
-        with redirect_stdout(stdout):
+        # cota criada no script não abre o diálogo "Modificar" (que prende a
+        # chamada COM até alguém clicar)
+        with redirect_stdout(stdout), no_dimension_prompt(app):
             exec(compile(code, "<run_sw_script>", "exec"), scope)  # noqa: S102
     except Exception:
         return {

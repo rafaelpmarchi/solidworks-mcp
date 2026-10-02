@@ -110,6 +110,51 @@ Paridade adicional (guiada pela brochura QS2026 e pelo Helpfile em docs/):
    é interpolada — buraco de scan é informação, não zero). O mapa NÃO alinha:
    scan e STL precisam estar no mesmo sistema — é o que `to_cad` garante.
 
+## Peça de revolução (disco, flange, cubo, polia)
+
+Aprendido na aranha de disco de freio (scan de UM lado, 02/10/2026), onde o
+PCA deixou o eixo 3,6 mm fora do furo e o perfil/furos saíram de scripts:
+
+1. `mesh_align(mode="axis")` — eixo pela geometria das normais (toda reta
+   normal de uma superfície de revolução corta o eixo; Pottmann & Randrup,
+   mínimos quadrados robustos). Normais por PCA local (a normal de uma face
+   de scan erra graus — a 70 mm do eixo isso é 2-3 mm). Furos fora do centro e
+   orelhas viram outliers. Na aranha: 0,08 mm do centro do furo e 0,07° do
+   eixo. `z_origin="min"` deixa a peça em Z ≥ 0.
+2. `mesh_revolve_profile` — (r, z) de pontos densos; só entram células vistas
+   em ≥ `min_coverage` da volta (furos e paredes de orelha ficam fora). Onde
+   duas superfícies se ALTERNAM na volta (topo da orelha × aba entre orelhas,
+   ~50 % cada) a escolha é global por nível de z — coluna a coluna misturava
+   os dois e a curva fazia desvio. Saída: polilinha de CANTOS VIVOS (retas
+   reajustadas e intersectadas), `fillets` com o raio estimado em cada canto
+   (δ = R(1 − sen θ/2), só pontos com normal entre as das duas retas), e
+   rms. Scan de um lado só sai ABERTO: `thickness_mm` fecha com parede de
+   espessura constante (estimativa). `draw=True` desenha perfil + linha de
+   centro num esboço que contém o eixo (`fillets=True` põe as concordâncias
+   no esboço — desligado: o SW caiu na cotagem do revolve com elas, ver ADR
+   0011; filete as arestas depois).
+3. `mesh_detect_holes` — vazios fechados vistos ao longo do eixo; Ø pelo
+   ajuste nas PAREDES (o raster erra ~0,4 mm); vazio sem parede é lacuna de
+   scan (adesivo de alvo). Grupos por Ø+raio e só por raio, com o padrão
+   angular (posições, passo, ângulo inicial, quais faltam). Na aranha: 12 em
+   Ø83 a 30° (5×Ø9,07 + 7×Ø14,0), 15×Ø4,36 em Ø173 a 24°, 3×Ø4,8 em Ø98.
+   `draw=True` desenha os furos no esboço ativo (perpendicular ao eixo).
+4. `mesh_apply_to_sw` — o estado guarda a transformação acumulada desde o
+   `mesh_import`; esta tool a aplica ao corpo de malha do SolidWorks (Mover/
+   Copiar corpo: giro X, Y, Z e translação — o 1º ângulo da API gira em Z e
+   o 3º em X, medido) para scan e modelo viverem no mesmo sistema.
+5. `mesh_deviation_map(reference_stl="active_doc", bodies=[...])` — mede o
+   documento aberto sem realinhar. O STL agora sai nas coordenadas da peça
+   (o padrão do SW translada para o octante positivo — eram ~90 mm de erro
+   silencioso), em mm e fino.
+6. `surface_from_faces` — se o pedido é SUPERFÍCIE: modele o sólido auxiliar
+   e copie as faces voltadas para o scanner (offset 0).
+
+Cuidados: malha de milhões de triângulos VISÍVEL no documento deixa cada
+chamada de API lenta (minutos) — `set_body_visibility` antes de modelar.
+Importar STL no SolidWorks como superfície leva ~10 min para 300 k faces e
+abre o diálogo "Novo documento" se não houver template padrão marcado.
+
 ## Regiões (sem picking gráfico)
 
 As tools aceitam `region` em JSON — ver `engine/swengine/region.py`:
