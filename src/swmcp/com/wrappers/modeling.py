@@ -241,14 +241,28 @@ def sketch_rectangle(app: Any, x1: float, y1: float, x2: float, y2: float, cente
 
 
 def sketch_arc_center(app: Any, xc: float, yc: float, x1: float, y1: float, x2: float, y2: float,
-                      direction: int = 1, short_arc: bool = True) -> dict[str, Any]:
+                      direction: int = 1, short_arc: bool = True,
+                      merge_ends: bool = True) -> dict[str, Any]:
     """Arco por centro + início + fim. direction: 1 anti-horário, -1 horário.
 
     short_arc (padrão): o arco tem que ser o CURTO entre as pontas — o
     CreateArc às vezes sai com o maior (medido no SW2023: o sentido depende
     da orientação do esboço), e isso passa despercebido até a massa mudar
     +10 000 mm³. O comprimento é conferido e o arco refeito no outro sentido.
+
+    merge_ends (padrão): une cada ponta do arco ao ponto que já existe na
+    mesma coordenada. Fechando um contorno de sketch_polyline, a inferência
+    une só UMA das pontas (medido no SW2023, roda de polo 10006900433); a
+    outra fica duplicada e o corte é recusado sem explicação.
     """
+    resultado = _sketch_arc_center(app, xc, yc, x1, y1, x2, y2, direction, short_arc)
+    if merge_ends:
+        resultado["merged_ends"] = _merge_points_at(app, [(x1, y1), (x2, y2)])
+    return resultado
+
+
+def _sketch_arc_center(app: Any, xc: float, yc: float, x1: float, y1: float, x2: float, y2: float,
+                       direction: int, short_arc: bool) -> dict[str, Any]:
     import math
 
     raio = math.hypot(x1 - xc, y1 - yc)
@@ -346,6 +360,48 @@ def _merge_coincident_points(app: Any, limite: int = 200) -> int:
         com_call(model, "ClearSelection2", True)
         com_call(pontos[0], "Select4", False, None)
         com_call(pontos[1], "Select4", True, None)
+        com_call(model, "SketchAddConstraints", "sgCOINCIDENT")
+        unidos += 1
+    com_call(model, "ClearSelection2", True)
+    return unidos
+
+
+def _merge_points_at(app: Any, coords_mm: list[tuple[float, float]], limite: int = 20) -> int:
+    """Une os pontos do esboço ativo que caem em cada coordenada dada.
+
+    Versão dirigida de _merge_coincident_points: olha só as coordenadas
+    pedidas (as pontas de uma entidade recém-criada), em vez de varrer o
+    contorno inteiro — sketch_arc é chamado em laço pelo desdobramento de
+    malha, e a varredura completa a cada arco ficaria quadrática.
+    """
+    model = _model(_active_doc(app))
+    alvos = [(float(x), float(y)) for x, y in coords_mm]
+    unidos = 0
+    total_anterior = None
+    for _ in range(limite):
+        ativo = com_get(com_get(model, "SketchManager"), "ActiveSketch")
+        if ativo is None:
+            break
+        pontos = [cast_to(p, "ISketchPoint")
+                  for p in com_call(cast_to(ativo, "ISketch"), "GetSketchPoints2") or []]
+        if total_anterior is not None and len(pontos) >= total_anterior:
+            log.warning("a coincidência não uniu os pontos em %s", alvos)
+            unidos -= 1
+            break
+        total_anterior = len(pontos)
+        par = None
+        for ax, ay in alvos:
+            juntos = [p for p in pontos
+                      if abs(units.to_mm(com_get(p, "X")) - ax) < SKETCH_TOLERANCE_MM
+                      and abs(units.to_mm(com_get(p, "Y")) - ay) < SKETCH_TOLERANCE_MM]
+            if len(juntos) > 1:
+                par = juntos[:2]
+                break
+        if par is None:
+            break
+        com_call(model, "ClearSelection2", True)
+        com_call(par[0], "Select4", False, None)
+        com_call(par[1], "Select4", True, None)
         com_call(model, "SketchAddConstraints", "sgCOINCIDENT")
         unidos += 1
     com_call(model, "ClearSelection2", True)
@@ -830,13 +886,101 @@ def _restore_selection(model: Any, itens: list[tuple[Any, int]]) -> None:
             com_call(cast_to(obj, "IFeature"), "Select2", True, mark)
 
 
-def circular_pattern(app: Any, count: int, angle_deg: float = 360.0,
-                     equal_spacing: bool = True, flip: bool = False) -> str:
-    """Padrão circular das features selecionadas.
+def _solid_volume_mm3(app: Any) -> float:
+    part = cast_to(_active_doc(app), "IPartDoc")
+    return sum(com_call(cast_to(b, "IBody2"), "GetMassProperties", 1.0)[3] * 1e9
+               for b in com_call(part, "GetBodies2", 0, True) or [])
 
-    Seleção esperada: features mark=4; eixo/aresta circular mark=1.
+
+def _selected_features(model: Any, mark: int) -> list[Any]:
+    sm = cast_to(com_get(model, "SelectionManager"), "ISelectionMgr")
+    feats = []
+    for i in range(1, (com_call(sm, "GetSelectedObjectCount2", -1) or 0) + 1):
+        if com_call(sm, "GetSelectedObjectMark", i) != mark:
+            continue
+        obj = com_call(sm, "GetSelectedObject6", i, -1)
+        try:
+            feats.append(cast_to(obj, "IFeature"))
+        except Exception:  # noqa: BLE001 — item com a marca que não é feature
+            continue
+    return feats
+
+
+def _seed_effect_mm3(app: Any, model: Any, seeds: list[Any]) -> float:
+    """Quanto as features-semente mudam o volume: suprime, mede, devolve.
+
+    Negativo para corte, positivo para ressalto. É a régua para conferir o
+    padrão: cada instância tem que mudar o volume o mesmo tanto.
     """
-    fm = com_get(_model(_active_doc(app)), "FeatureManager")
+    com_call(model, "EditRebuild3")
+    com_volume = _solid_volume_mm3(app)
+    for f in seeds:
+        com_call(f, "SetSuppression2", 0, 2, None)
+    try:
+        com_call(model, "EditRebuild3")
+        sem_volume = _solid_volume_mm3(app)
+    finally:
+        for f in seeds:
+            com_call(f, "SetSuppression2", 1, 2, None)
+        com_call(model, "EditRebuild3")
+    return com_volume - sem_volume
+
+
+def circular_pattern(app: Any, count: int, angle_deg: float = 360.0,
+                     equal_spacing: bool = True, flip: bool = False,
+                     features: list[str] | None = None,
+                     axis_edge_center_mm: list[float] | None = None,
+                     axis_edge_diameter_mm: float = 0.0,
+                     check_tolerance_pct: float = 5.0) -> dict[str, Any]:
+    """Padrão circular das features-semente, CONFERIDO pelo volume.
+
+    Seleção: features= (nomes) e axis_edge_* (aresta circular, casada pela
+    geometria) montam a seleção aqui; sem eles vale a seleção prévia
+    (features mark=4, eixo mark=1).
+
+    Medido no SW2023 (roda de polo 10006900433): com a FACE cilíndrica do furo
+    como eixo, o padrão de 30 saiu com ~3 instâncias e nenhum erro — a
+    definição dizia 30. Por isso o efeito de volume da semente é medido antes
+    (suprime/mede/volta) e o do padrão depois: instances_measured tem que dar
+    count. Diferença maior que check_tolerance_pct volta ok=False — instâncias
+    que se sobrepõem ou saem da peça também dão isso, e aí é para olhar.
+    """
+    model = _model(_active_doc(app))
+    sm = cast_to(com_get(model, "SelectionManager"), "ISelectionMgr")
+    if features or axis_edge_center_mm:
+        if not (features and axis_edge_center_mm and axis_edge_diameter_mm > 0):
+            raise ComCallError("circular_pattern", (features, axis_edge_center_mm), None,
+                               "passe features E axis_edge_center_mm/axis_edge_diameter_mm "
+                               "juntos (ou nenhum, usando a seleção prévia)")
+        from swmcp.com.wrappers import holes
+        aresta = holes._find_circular_edge(app, axis_edge_center_mm, axis_edge_diameter_mm,
+                                           holes.EDGE_MATCH_TOLERANCE_MM)
+        if aresta is None:
+            raise ComCallError("circular_pattern", (axis_edge_center_mm, axis_edge_diameter_mm),
+                               None, "nenhuma aresta circular com esse centro e diâmetro "
+                                     "(use list_circular_edges)")
+        seeds = [_feature_by_name(model, n) for n in features]
+    else:
+        seeds = _selected_features(model, 4)
+        if not seeds:
+            raise ComCallError("circular_pattern", (), None,
+                               "nenhuma feature selecionada com mark=4 — ou passe features=")
+        selecao = _snapshot_selection(model)
+
+    efeito_semente = _seed_effect_mm3(app, model, seeds)
+    volume_antes = _solid_volume_mm3(app)
+
+    com_call(model, "ClearSelection2", True)
+    if features:
+        for f in seeds:
+            com_call(f, "Select2", True, 4)
+        sd = cast_to(com_call(sm, "CreateSelectData"), "ISelectData")
+        sd.Mark = 1
+        com_call(cast_to(aresta, "IEntity"), "Select4", True, sd)
+    else:
+        _restore_selection(model, selecao)
+
+    fm = com_get(model, "FeatureManager")
     # (Number, Spacing, FlipDirection, DName, GeometryPattern, EqualSpacing,
     #  VaryInstance, SyncSubAssemblies, BDir2, BSymmetric, Number2, Spacing2,
     #  DName2, EqualSpacing2)
@@ -845,7 +989,27 @@ def circular_pattern(app: Any, count: int, angle_deg: float = 360.0,
         count, units.from_deg(angle_deg), flip, "NULL", False, equal_spacing,
         False, False, False, False, 1, 0.0, "NULL", False,
     )
-    return _feature_name(feat, "FeatureCircularPattern5")
+    nome = _feature_name(feat, "FeatureCircularPattern5")
+    com_call(model, "EditRebuild3")
+    efeito_padrao = _solid_volume_mm3(app) - volume_antes
+
+    resultado: dict[str, Any] = {"feature": nome, "instances_expected": count,
+                                 "seed_volume_effect_mm3": round(efeito_semente, 3),
+                                 "pattern_volume_effect_mm3": round(efeito_padrao, 3)}
+    if abs(efeito_semente) < 1e-3:
+        resultado.update(ok=None, warning="a semente não muda o volume — não dá para conferir")
+        return resultado
+    medidas = 1 + efeito_padrao / efeito_semente
+    resultado["instances_measured"] = round(medidas, 2)
+    desvio = abs(medidas - count) / count * 100.0
+    resultado["ok"] = desvio <= check_tolerance_pct
+    if not resultado["ok"]:
+        resultado["warning"] = (
+            f"o volume mudou como {medidas:.1f} instâncias, não {count} — eixo errado "
+            "(use a ARESTA circular em axis_edge_*), instâncias fora da peça ou sobrepostas; "
+            "confira com screenshot antes de seguir")
+        log.warning("padrão circular %s: %s", nome, resultado["warning"])
+    return resultado
 
 
 def mirror_feature(app: Any) -> str:

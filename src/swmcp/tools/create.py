@@ -87,10 +87,12 @@ def register(mcp: MCPServer, session: SwSession) -> None:
 
     @mcp.tool()
     def sketch_arc(xc: float, yc: float, x1: float, y1: float, x2: float, y2: float,
-                   clockwise: bool = False) -> dict[str, bool]:
+                   clockwise: bool = False) -> dict[str, Any]:
         """Arco por centro (xc,yc), ponto inicial e final (mm). Sai sempre o
         arco CURTO entre as pontas (conferido pelo comprimento — o CreateArc
-        às vezes dá o maior); o retorno traz o comprimento."""
+        às vezes dá o maior); o retorno traz o comprimento. Cada ponta é
+        unida ao ponto que já existir na mesma coordenada (merged_ends) —
+        é assim que o arco fecha um contorno de sketch_polyline."""
         return session.run(lambda app: m.sketch_arc_center(app, xc, yc, x1, y1, x2, y2,
                                                            -1 if clockwise else 1))
 
@@ -418,11 +420,20 @@ def register(mcp: MCPServer, session: SwSession) -> None:
 
     @mcp.tool()
     def circular_pattern(count: int, angle_deg: float = 360, equal_spacing: bool = True,
-                         flip: bool = False) -> dict[str, str]:
-        """Padrão circular. Antes: feature(s) com mark=4 e eixo/aresta circular
-        com mark=1 (uma aresta cilíndrica serve de eixo)."""
-        return {"feature": session.run(
-            lambda app: m.circular_pattern(app, count, angle_deg, equal_spacing, flip))}
+                         flip: bool = False, features: list[str] | None = None,
+                         axis_edge_center_mm: list[float] | None = None,
+                         axis_edge_diameter_mm: float = 0) -> dict[str, Any]:
+        """Padrão circular CONFERIDO pelo volume. Jeito preferido: features=
+        (nomes das sementes) + axis_edge_center_mm/axis_edge_diameter_mm (a
+        ARESTA circular do eixo, casada pela geometria — list_circular_edges
+        mostra as que existem). Sem eles vale a seleção prévia (features
+        mark=4, eixo mark=1). O efeito de volume da semente é medido antes e
+        o do padrão depois: instances_measured tem que bater com count, senão
+        volta ok=False com warning — já aconteceu o padrão sair com 3 de 30
+        instâncias sem erro nenhum (eixo pela face do furo)."""
+        return session.run(lambda app: m.circular_pattern(
+            app, count, angle_deg, equal_spacing, flip, features,
+            axis_edge_center_mm, axis_edge_diameter_mm))
 
     @mcp.tool()
     def mirror_feature() -> dict[str, str]:

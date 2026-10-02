@@ -143,6 +143,8 @@ def test_religa_eixo_de_padrao_circular_e_renomeia_em_lote(session, eixo):
 
     session.run(seleciona)
     padrao = session.run(lambda app: m.circular_pattern(app, 4))
+    assert padrao["ok"], padrao
+    padrao = padrao["feature"]
     assert session.run(lambda app: i.check_rebuild_errors(app))["clean"]
 
     religado = session.run(lambda app: r.set_circular_pattern_axis(app, padrao, [20, 0, 20]))
